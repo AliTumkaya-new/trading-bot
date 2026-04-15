@@ -771,41 +771,27 @@ with tab4:
             # SL/TP yüzdeleri
             sl_pct = t.get("stop_loss_pct") or 0
             tp_pct = t.get("take_profit_pct") or 0
-            sl_tp_html = ""
+            sl_tp_text = ""
             if sl_pct or tp_pct:
-                sl_tp_html = f"""
-                <div style="text-align:center;">
-                    <span class="d">SL:</span> <span class="r"><b>%{sl_pct*100:.1f}</b></span>
-                    <span class="d" style="margin-left:8px;">TP:</span> <span class="g"><b>%{tp_pct*100:.1f}</b></span>
-                </div>"""
+                sl_tp_text = (
+                    f' · <span class="d">SL:</span> <span class="r"><b>%{sl_pct*100:.1f}</b></span>'
+                    f' <span class="d">TP:</span> <span class="g"><b>%{tp_pct*100:.1f}</b></span>'
+                )
 
             st.markdown(
-                f"""
-            <div class="trade-card">
+                f"""<div class="trade-card">
                 <div style="min-width:140px;">
                     <span class="{color}" style="font-weight:700;">{icon} {label}</span>
+                    <span class="d" style="font-size:0.75rem; margin-left:6px;">{time_str}</span>
                 </div>
                 <div style="min-width:100px;">
                     <span class="w" style="font-weight:700;">{t['symbol']}</span>
-                    <span class="d" style="font-size:0.75rem; margin-left:4px;">
-                        {t['market'].upper()}
-                    </span>
+                    <span class="d" style="font-size:0.75rem; margin-left:4px;">{t['market'].upper()}</span>
                 </div>
                 <div style="text-align:center;">
-                    <span class="d">Fiyat:</span>
-                    <span class="w"><b>{t['price']:.4f}</b></span>
-                    <span class="d" style="margin-left:12px;">Miktar:</span>
-                    <span class="w"><b>{t['quantity']:.4f}</b></span>
-                </div>
-                <div style="text-align:center;">
-                    <span class="d">Tutar:</span>
-                    <span class="y"><b>₺{t['notional']:,.2f}</b></span>
-                    <span class="d" style="margin-left:12px;">Komisyon:</span>
-                    <span class="r">{t['fee']:.4f}</span>
-                </div>
-                {sl_tp_html}
-                <div style="text-align:right; min-width:120px;">
-                    <span class="d" style="font-size:0.78rem;">{time_str}</span>
+                    <span class="d">Fiyat:</span> <span class="w"><b>{t['price']:.4f}</b></span>
+                    <span class="d" style="margin-left:8px;">Miktar:</span> <span class="w"><b>{t['quantity']:.4f}</b></span>
+                    <span class="d" style="margin-left:8px;">Tutar:</span> <span class="y"><b>₺{t['notional']:,.2f}</b></span>{sl_tp_text}
                 </div>
             </div>""",
                 unsafe_allow_html=True,

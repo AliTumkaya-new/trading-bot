@@ -83,6 +83,8 @@ class Position:
     quantity: float = 0.0
     avg_price: float = 0.0
     realized_pnl: float = 0.0
+    leverage: int = 1
+    leverage: int = 1
 
     def update_from_fill(self, fill: Fill) -> None:
         if fill.side == Side.BUY:

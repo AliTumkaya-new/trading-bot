@@ -84,13 +84,25 @@ class PaperBroker:
             order.symbol,
             Position(symbol=order.symbol, market=order.market),
         )
-        position.update_from_fill(fill)
 
         if order.side == Side.BUY:
+            position.leverage = leverage
+            position.update_from_fill(fill)
             self.cash -= (margin + fee)
         else:
-            # Selling existing LONG — margin geri döner
-            self.cash += notional - fee
+            # Selling existing LONG — kaldıraçlı pozisyonda margin + PnL geri döner
+            pos_lev = position.leverage if position.leverage > 1 else leverage
+            entry_notional = position.avg_price * order.quantity
+            pnl = (mark_price - position.avg_price) * order.quantity
+            locked_margin = entry_notional / pos_lev if pos_lev > 1 else entry_notional
+            position.update_from_fill(fill)
+            self.cash += locked_margin + pnONG — kaldıraçlı pozisyonda margin + PnL geri döner
+            pos_lev = position.leverage if position.leverage > 1 else leverage
+            entry_notional = position.avg_price * order.quantity
+            pnl = (mark_price - position.avg_price) * order.quantity
+            locked_margin = entry_notional / pos_lev if pos_lev > 1 else entry_notional
+            position.update_from_fill(fill)
+            self.cash += locked_margin + pnl - fee
 
         if position.quantity == 0 and position.realized_pnl == 0:
             self.positions.pop(order.symbol, None)
