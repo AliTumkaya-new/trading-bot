@@ -420,7 +420,7 @@ with tab1:
             st.markdown(
                 f"""<div class="top-card">
                 <p class="label">Açık Pozisyon</p>
-                <p class="value p">{len(positions)}</p>
+                <p class="value p">{len(_positions)}</p>
                 <p class="sub d">🟢 {longs} Long · 🔴 {shorts} Short</p>
             </div>""",
                 unsafe_allow_html=True,
