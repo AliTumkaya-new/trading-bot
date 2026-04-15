@@ -85,10 +85,15 @@ jobs:
           git config user.name "trading-bot"
           git config user.email "bot@trading.local"
           git add -f trading_system_v1/data/trades.db
+          git add -f trading_system_v1/data/ml_model.pkl 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No DB changes to commit"
           else
             git commit -m "bot: trade cycle $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git pull --rebase
-            git push
+            # Conflict-safe push: 3 kez dene
+            for i in 1 2 3; do
+              git pull --rebase --strategy-option=ours origin main && git push origin main && break
+              echo "Push attempt $i failed, retrying..."
+              sleep 5
+            done
           fi
