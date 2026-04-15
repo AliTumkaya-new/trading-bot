@@ -1,13 +1,17 @@
-name: Trading Bot 7/24
+name: Trading Bot — Tam Tarama
 
 on:
   schedule:
-    # Her 4 saatte bir çalış (UTC): 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
-    - cron: '0 */4 * * *'
-  workflow_dispatch:  # Manuel tetikleme butonu
+    # Her 2 saatte bir tam piyasa taraması (UTC)
+    - cron: '0 */2 * * *'
+  workflow_dispatch:  # Manuel tetikleme
 
 permissions:
   contents: write
+
+concurrency:
+  group: trading-bot
+  cancel-in-progress: false
 
 jobs:
   trade-cycle:

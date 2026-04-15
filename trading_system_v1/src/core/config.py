@@ -32,10 +32,10 @@ class ScannerConfig:
         "THYAO.IS", "ASELS.IS", "TUPRS.IS", "GARAN.IS",
         "KCHOL.IS", "SAHOL.IS", "FROTO.IS", "BIMAS.IS",
     ])
-    lookback_bars: int = 120             # 4h mumlar için yeterli
-    interval: str = "4h"                 # 4 saatlik — kısa vadeli momentum
-    bist_interval: str = "1d"            # BIST için günlük (Yahoo 4h desteklemiyor)
-    cycle_interval_minutes: int = 240    # Tarama döngüsü aralığı (dakika) — 4h
+    lookback_bars: int = 200             # 1h mumlar için yeterli geçmiş
+    interval: str = "1h"                 # 1 saatlik — daha hızlı sinyaller
+    bist_interval: str = "1d"            # BIST için günlük (Yahoo 1h desteklemiyor)
+    cycle_interval_minutes: int = 120    # Tarama döngüsü aralığı (dakika) — 2h
 
 
 @dataclass(slots=True)

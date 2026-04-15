@@ -667,6 +667,314 @@ def run_cycle() -> None:
 
 
 # ---------------------------------------------------------------------------
+# MONITOR MODU — Sadece açık pozisyonları kontrol et (hafif, hızlı)
+# Her 30 dakikada GitHub Actions ile çalışır
+# ---------------------------------------------------------------------------
+
+def _fetch_binance_prices(symbols: list[str]) -> dict[str, float]:
+    """Binance'den anlık fiyatları toplu çek — çok hızlı, tek API çağrısı."""
+    import requests
+    prices: dict[str, float] = {}
+    try:
+        resp = requests.get(
+            "https://api.binance.com/api/v3/ticker/price",
+            timeout=10,
+        )
+        resp.raise_for_status()
+        all_prices = {item["symbol"]: float(item["price"]) for item in resp.json()}
+        for sym in symbols:
+            if sym in all_prices:
+                prices[sym] = all_prices[sym]
+    except Exception as e:
+        logger.warning("Binance fiyat çekme hatası: %s", e)
+        # Fallback: tek tek çek
+        for sym in symbols:
+            try:
+                r = requests.get(
+                    f"https://api.binance.com/api/v3/ticker/price?symbol={sym}",
+                    timeout=5,
+                )
+                if r.ok:
+                    prices[sym] = float(r.json()["price"])
+            except Exception:
+                pass
+    return prices
+
+
+def _fetch_bist_prices(symbols: list[str]) -> dict[str, float]:
+    """Yahoo Finance'den BIST anlık fiyatları çek."""
+    import yfinance as yf
+    prices: dict[str, float] = {}
+    for sym in symbols:
+        try:
+            ticker = yf.Ticker(sym)
+            hist = ticker.history(period="1d")
+            if not hist.empty:
+                prices[sym] = float(hist.iloc[-1]["Close"])
+        except Exception:
+            pass
+    return prices
+
+
+def run_monitor() -> None:
+    """
+    Hafif pozisyon monitörü — sadece açık pozisyonları kontrol eder.
+    Yeni işlem AÇMAZ, sadece mevcut pozisyonları yönetir:
+    - Trailing stop güncelle
+    - Stop-loss / Take-profit kontrol
+    - Kısmi kâr al
+    - Zaman aşımı kontrolü
+    ~20-30 saniyede tamamlanır.
+    """
+    config = AppConfig()
+    init_db()
+    init_portfolio(config.risk.capital_tl)
+
+    learner = AdaptiveLearner(db_conn)
+
+    portfolio = get_portfolio()
+    cash = portfolio["cash"] if portfolio else config.risk.capital_tl
+    broker = PaperBroker(cash=cash)
+
+    db_positions = get_open_positions()
+    if not db_positions:
+        logger.info("⚡ MONİTÖR: Açık pozisyon yok, çıkılıyor.")
+        return
+
+    # Pozisyonları broker'a yükle
+    for pos in db_positions:
+        direction = pos.get("direction", "long")
+        if direction == "short":
+            broker.short_positions[pos["symbol"]] = {
+                "quantity": pos["quantity"],
+                "entry_price": pos["avg_price"],
+                "market": MarketType(pos["market"]),
+                "leverage": pos.get("leverage") or 1,
+            }
+        else:
+            from core.models import Position
+            broker.positions[pos["symbol"]] = Position(
+                symbol=pos["symbol"],
+                market=MarketType(pos["market"]),
+                quantity=pos["quantity"],
+                avg_price=pos["avg_price"],
+            )
+
+    # Açık pozisyonların sembollerini topla
+    crypto_symbols = [p["symbol"] for p in db_positions if p["market"] == "crypto"]
+    bist_symbols = [p["symbol"] for p in db_positions if p["market"] == "bist"]
+
+    _print_header("⚡ HIZLI MONİTÖR — Pozisyon Kontrolü")
+    logger.info("Açık pozisyon: %d (Kripto: %d, BIST: %d)",
+                len(db_positions), len(crypto_symbols), len(bist_symbols))
+
+    # Anlık fiyatları çek (tek API çağrısı — çok hızlı)
+    prices: dict[str, float] = {}
+    if crypto_symbols:
+        prices.update(_fetch_binance_prices(crypto_symbols))
+    if bist_symbols:
+        prices.update(_fetch_bist_prices(bist_symbols))
+
+    if not prices:
+        logger.warning("⚠️ Hiçbir fiyat alınamadı, monitor çıkıyor.")
+        return
+
+    trailing_pct = config.risk.trailing_stop_pct
+    strategy = AggressiveMomentumStrategy()
+    closed_count = 0
+
+    # ── LONG POZİSYON KONTROLÜ ──
+    for sym, pos in list(broker.positions.items()):
+        current_price = prices.get(sym)
+        if current_price is None:
+            logger.info("⚠️ %s fiyat alınamadı, atlanıyor", sym)
+            continue
+
+        db_pos = next((p for p in db_positions if p["symbol"] == sym), None)
+        if not db_pos:
+            continue
+
+        pnl_pct = (current_price - pos.avg_price) / pos.avg_price if pos.avg_price > 0 else 0.0
+        sl = db_pos.get("stop_loss") or 0
+        tp = db_pos.get("take_profit") or 0
+        highest = db_pos.get("highest_price") or pos.avg_price
+        partial_taken = db_pos.get("partial_taken") or 0
+
+        # Trailing stop güncelle
+        if current_price > highest:
+            highest = current_price
+        trailing_stop = highest * (1 - trailing_pct)
+        effective_sl = max(sl, trailing_stop) if sl else trailing_stop
+
+        # 1. Stop-loss / Trailing stop
+        if effective_sl and current_price <= effective_sl:
+            loss = (current_price - pos.avg_price) * pos.quantity
+            loss_pct = pnl_pct * 100
+            reason = "trailing_stop" if trailing_stop >= sl else "stop_loss"
+            logger.info("🛑 MONİTÖR %s: %s | Giriş: %.4f | Çıkış: %.4f | P&L: %+.2f TL (%+.2f%%)",
+                        reason.upper(), sym, pos.avg_price, current_price, loss, loss_pct)
+            order = OrderRequest(symbol=sym, market=pos.market, side=Side.SELL, quantity=pos.quantity)
+            fill = broker.submit_market_order(order=order, mark_price=current_price)
+            record_trade(sym, pos.market.value, "sell", fill.quantity, fill.price, fill.fee,
+                         strategy=strategy.name, metadata=json.dumps({"reason": reason, "source": "monitor"}))
+            increment_trade_stats(won=loss >= 0, pnl=loss)
+            upsert_position(sym, pos.market.value, 0, 0)
+            closed_count += 1
+            continue
+
+        # 2. Take-profit
+        if tp and current_price >= tp:
+            profit = (current_price - pos.avg_price) * pos.quantity
+            logger.info("🎯 MONİTÖR TP: %s | Giriş: %.4f | Çıkış: %.4f | Kâr: %+.2f TL",
+                        sym, pos.avg_price, current_price, profit)
+            order = OrderRequest(symbol=sym, market=pos.market, side=Side.SELL, quantity=pos.quantity)
+            fill = broker.submit_market_order(order=order, mark_price=current_price)
+            record_trade(sym, pos.market.value, "sell", fill.quantity, fill.price, fill.fee,
+                         strategy=strategy.name, metadata=json.dumps({"reason": "take_profit", "source": "monitor"}))
+            increment_trade_stats(won=True, pnl=profit)
+            upsert_position(sym, pos.market.value, 0, 0)
+            closed_count += 1
+            continue
+
+        # 3. Kısmi kâr alma
+        if not partial_taken and tp and pos.avg_price > 0:
+            half_tp = pos.avg_price + (tp - pos.avg_price) * 0.5
+            if current_price >= half_tp:
+                sell_qty = round(pos.quantity * 0.5, 8)
+                if sell_qty > 0:
+                    partial_profit = (current_price - pos.avg_price) * sell_qty
+                    logger.info("💰 MONİTÖR KISMİ KÂR: %s | %d%% kapatıldı | Kâr: %+.2f TL",
+                                sym, 50, partial_profit)
+                    order = OrderRequest(symbol=sym, market=pos.market, side=Side.SELL, quantity=sell_qty)
+                    fill = broker.submit_market_order(order=order, mark_price=current_price)
+                    record_trade(sym, pos.market.value, "sell", fill.quantity, fill.price, fill.fee,
+                                 strategy=strategy.name, metadata=json.dumps({"reason": "partial_profit", "source": "monitor"}))
+                    remaining_qty = pos.quantity
+                    new_sl = max(effective_sl, pos.avg_price)
+                    upsert_position(sym, pos.market.value, remaining_qty, pos.avg_price,
+                                    stop_loss=new_sl, take_profit=tp, direction="long",
+                                    leverage=db_pos.get("leverage") or 1,
+                                    highest_price=highest, partial_taken=1)
+                    continue
+
+        # 4. Zaman aşımı
+        entry_time_str = db_pos.get("entry_time")
+        if entry_time_str:
+            try:
+                entry_dt = datetime.fromisoformat(entry_time_str)
+                hours_open = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 3600
+                if hours_open > 120 and pnl_pct < 0.01:
+                    pnl_val = (current_price - pos.avg_price) * pos.quantity
+                    logger.info("⏰ MONİTÖR ZAMAN: %s | %.0f saat | P&L: %+.2f TL — kapatıldı",
+                                sym, hours_open, pnl_val)
+                    order = OrderRequest(symbol=sym, market=pos.market, side=Side.SELL, quantity=pos.quantity)
+                    fill = broker.submit_market_order(order=order, mark_price=current_price)
+                    record_trade(sym, pos.market.value, "sell", fill.quantity, fill.price, fill.fee,
+                                 strategy=strategy.name, metadata=json.dumps({"reason": "time_exit", "source": "monitor"}))
+                    increment_trade_stats(won=pnl_val >= 0, pnl=pnl_val)
+                    upsert_position(sym, pos.market.value, 0, 0)
+                    closed_count += 1
+                    continue
+            except (ValueError, TypeError):
+                pass
+
+        # Trailing bilgisi güncelle
+        upsert_position(sym, pos.market.value, pos.quantity, pos.avg_price,
+                        stop_loss=round(effective_sl, 6), take_profit=tp, direction="long",
+                        leverage=db_pos.get("leverage") or 1,
+                        highest_price=highest, partial_taken=partial_taken)
+
+        logger.info("📊 %s | %.4f → %.4f | TSL: %.4f | P&L: %+.2f%%",
+                    sym, pos.avg_price, current_price, effective_sl, pnl_pct * 100)
+
+    # ── SHORT POZİSYON KONTROLÜ ──
+    for sym, short_data in list(broker.short_positions.items()):
+        current_price = prices.get(sym)
+        if current_price is None:
+            continue
+
+        db_pos = next((p for p in db_positions if p["symbol"] == sym), None)
+        if not db_pos:
+            continue
+
+        entry = short_data["entry_price"]
+        qty = short_data["quantity"]
+        pnl_pct = (entry - current_price) / entry if entry > 0 else 0.0
+        sl = db_pos.get("stop_loss") or 0
+        tp = db_pos.get("take_profit") or 0
+        lowest = db_pos.get("lowest_price") or entry
+        partial_taken = db_pos.get("partial_taken") or 0
+
+        if current_price < lowest:
+            lowest = current_price
+        trailing_stop = lowest * (1 + trailing_pct)
+        effective_sl = min(sl, trailing_stop) if sl else trailing_stop
+
+        # 1. Stop-loss / Trailing stop
+        if effective_sl and current_price >= effective_sl:
+            loss = (entry - current_price) * qty
+            reason = "trailing_stop" if trailing_stop <= sl else "short_stop_loss"
+            logger.info("🛑 MONİTÖR %s: %s | P&L: %+.2f TL", reason.upper(), sym, loss)
+            order = OrderRequest(symbol=sym, market=short_data["market"], side=Side.BUY, quantity=qty)
+            fill = broker.submit_market_order(order=order, mark_price=current_price)
+            record_trade(sym, short_data["market"].value, "buy_to_cover", fill.quantity, fill.price, fill.fee,
+                         strategy=strategy.name, metadata=json.dumps({"reason": reason, "source": "monitor"}))
+            increment_trade_stats(won=loss >= 0, pnl=loss)
+            upsert_position(sym, short_data["market"].value, 0, 0)
+            closed_count += 1
+            continue
+
+        # 2. Take-profit
+        if tp and current_price <= tp:
+            profit = (entry - current_price) * qty
+            logger.info("🎯 MONİTÖR SHORT TP: %s | Kâr: %+.2f TL", sym, profit)
+            order = OrderRequest(symbol=sym, market=short_data["market"], side=Side.BUY, quantity=qty)
+            fill = broker.submit_market_order(order=order, mark_price=current_price)
+            record_trade(sym, short_data["market"].value, "buy_to_cover", fill.quantity, fill.price, fill.fee,
+                         strategy=strategy.name, metadata=json.dumps({"reason": "short_take_profit", "source": "monitor"}))
+            increment_trade_stats(won=True, pnl=profit)
+            upsert_position(sym, short_data["market"].value, 0, 0)
+            closed_count += 1
+            continue
+
+        # 3. Kısmi kâr
+        if not partial_taken and tp and entry > 0:
+            half_tp = entry - (entry - tp) * 0.5
+            if current_price <= half_tp:
+                cover_qty = round(qty * 0.5, 8)
+                if cover_qty > 0:
+                    logger.info("💰 MONİTÖR SHORT KISMİ: %s | %d%% kapatıldı", sym, 50)
+                    order = OrderRequest(symbol=sym, market=short_data["market"], side=Side.BUY, quantity=cover_qty)
+                    fill = broker.submit_market_order(order=order, mark_price=current_price)
+                    record_trade(sym, short_data["market"].value, "buy_to_cover", fill.quantity, fill.price, fill.fee,
+                                 strategy=strategy.name, metadata=json.dumps({"reason": "short_partial_profit", "source": "monitor"}))
+                    short_data["quantity"] -= cover_qty
+                    new_sl = min(effective_sl, entry)
+                    upsert_position(sym, short_data["market"].value, short_data["quantity"], entry,
+                                    stop_loss=new_sl, take_profit=tp, direction="short",
+                                    leverage=short_data.get("leverage") or 1,
+                                    lowest_price=lowest, partial_taken=1)
+                    continue
+
+        # Trailing güncelle
+        upsert_position(sym, short_data["market"].value, qty, entry,
+                        stop_loss=round(effective_sl, 6), take_profit=tp, direction="short",
+                        leverage=short_data.get("leverage") or 1,
+                        lowest_price=lowest, partial_taken=partial_taken)
+
+        logger.info("📊 SHORT %s | %.4f → %.4f | TSL: %.4f | P&L: %+.2f%%",
+                    sym, entry, current_price, effective_sl, pnl_pct * 100)
+
+    # Nakit güncelle
+    update_portfolio_cash(broker.cash)
+
+    logger.info("")
+    logger.info("⚡ MONİTÖR TAMAMLANDI — %s | Kapatılan: %d | Kalan: %d",
+                datetime.now().strftime("%H:%M:%S"), closed_count,
+                len(db_positions) - closed_count)
+
+
+# ---------------------------------------------------------------------------
 # 7/24 sürekli çalışma döngüsü
 # ---------------------------------------------------------------------------
 _shutdown_requested = False
@@ -753,5 +1061,7 @@ def _sleep_interruptible(seconds: float) -> None:
 if __name__ == "__main__":
     if "--once" in sys.argv:
         run_cycle()
+    elif "--monitor" in sys.argv:
+        run_monitor()
     else:
         run_forever()
