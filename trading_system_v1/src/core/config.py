@@ -15,6 +15,7 @@ class RiskConfig:
     default_take_profit_pct: float = 0.08  # %8 take profit (3:1 R/R)
     trailing_stop_pct: float = 0.015     # %1.5 trailing stop
     crypto_leverage: int = 3             # Kripto kaldıraç (3x)
+    daily_loss_limit_tl: float = 500.0   # Günlük max zarar limiti (₺)
 
 
 @dataclass(slots=True)
@@ -35,7 +36,7 @@ class ScannerConfig:
     lookback_bars: int = 200             # 1h mumlar için yeterli geçmiş
     interval: str = "1h"                 # 1 saatlik — daha hızlı sinyaller
     bist_interval: str = "1d"            # BIST için günlük (Yahoo 1h desteklemiyor)
-    cycle_interval_minutes: int = 120    # Tarama döngüsü aralığı (dakika) — 2h
+    cycle_interval_minutes: int = 60     # Tarama döngüsü aralığı (dakika) — 1h
 
 
 @dataclass(slots=True)

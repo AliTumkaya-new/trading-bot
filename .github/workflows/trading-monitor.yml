@@ -2,8 +2,8 @@ name: Trading Bot — Hızlı Monitör
 
 on:
   schedule:
-    # Her 30 dakikada pozisyon kontrolü (UTC)
-    - cron: '*/30 * * * *'
+    # Her 15 dakikada pozisyon kontrolü (UTC)
+    - cron: '*/15 * * * *'
   workflow_dispatch:  # Manuel tetikleme
 
 permissions:

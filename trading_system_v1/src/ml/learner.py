@@ -37,11 +37,11 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
 }
 
 # Öğrenme hızı — ağırlıkların ne kadar hızlı değişeceğini kontrol eder
-LEARNING_RATE = 0.08
+LEARNING_RATE = 0.15
 # Minimum ağırlık — hiçbir indikatör 0'ın altına düşemez
 MIN_WEIGHT = 0.02
 # RF model eğitimi için gereken minimum kapanmış işlem sayısı
-MIN_TRADES_FOR_RF = 20
+MIN_TRADES_FOR_RF = 10
 
 MODEL_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "ml_model.pkl"
 
