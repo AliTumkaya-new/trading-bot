@@ -340,6 +340,42 @@ _live_total_pnl = _live_total_equity - _initial_capital if _initial_capital else
 _live_pnl_pct = (_live_total_pnl / _initial_capital * 100) if _initial_capital else 0.0
 
 
+# ─── Trade Stats Hesaplama (trades tablosundan) ─────────────────
+def _compute_trade_stats(trades: list[dict]) -> dict:
+    """Gerçek trade kayıtlarından istatistik hesapla."""
+    buy_entries: dict[str, float] = {}  # symbol -> avg entry price
+    sell_count = 0
+    win_count = 0
+    loss_count = 0
+    total_realized = 0.0
+
+    for t in reversed(trades):  # eskiden yeniye sıralı
+        sym = t["symbol"]
+        if t["side"] == "buy":
+            buy_entries[sym] = t["price"]
+        elif t["side"] in ("sell", "cover"):
+            sell_count += 1
+            entry = buy_entries.get(sym, 0)
+            if entry:
+                pnl = (t["price"] - entry) * t["quantity"]
+                total_realized += pnl
+                if pnl >= 0:
+                    win_count += 1
+                else:
+                    loss_count += 1
+
+    return {
+        "total_entries": len(trades),
+        "closed": sell_count,
+        "wins": win_count,
+        "losses": loss_count,
+        "win_rate": (win_count / sell_count * 100) if sell_count else 0,
+        "realized_pnl": total_realized,
+    }
+
+_trade_stats = _compute_trade_stats(_all_trades)
+
+
 # ─── Sidebar ─────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚡ Trading Platform")
@@ -426,15 +462,14 @@ with tab1:
                 unsafe_allow_html=True,
             )
         with c5:
-            tt = _portfolio["total_trades"]
-            wt = _portfolio["winning_trades"]
-            wr = (wt / tt * 100) if tt else 0
+            ts = _trade_stats
+            wr = ts["win_rate"]
             wr_cls = "g" if wr >= 50 else "r"
             st.markdown(
                 f"""<div class="top-card">
                 <p class="label">İşlem / Win Rate</p>
-                <p class="value y">{tt} işlem</p>
-                <p class="sub {wr_cls}">%{wr:.0f} başarı</p>
+                <p class="value y">{ts['total_entries']} işlem</p>
+                <p class="sub {wr_cls}">%{wr:.0f} başarı ({ts['closed']} kapatılan: {ts['wins']}W / {ts['losses']}L)</p>
             </div>""",
                 unsafe_allow_html=True,
             )
@@ -822,15 +857,18 @@ with tab4:
 # TAB 5 — PERFORMANS
 # ══════════════════════════════════════════════════════════════════
 with tab5:
-    if not _snapshots or not _portfolio:
-        st.info("Performans verisi yok.")
+    if not _portfolio:
+        st.info("Henüz veri yok. Terminalde taramayı çalıştırın.")
     else:
-        snap_df = pd.DataFrame(_snapshots)
         initial = _initial_capital
+        ts = _trade_stats
 
         st.markdown("### 📈 Performans Analizi")
 
-        # Canlı özet kartları (tüm tablarla tutarlı)
+        # Canlı özet kartları (her zaman göster)
+        realized = ts["realized_pnl"]
+        unrealized = _live_total_pnl - realized
+
         pc1, pc2, pc3, pc4, pc5 = st.columns(5)
         with pc1:
             st.metric("Sermaye", f"₺{initial:,.2f}")
@@ -842,8 +880,6 @@ with tab5:
                 delta_color="normal" if _live_total_pnl >= 0 else "inverse",
             )
         with pc3:
-            realized = _portfolio["total_pnl"]
-            unrealized = _live_total_pnl - realized
             st.metric("Gerçekleşmiş P&L", f"₺{realized:+,.2f}")
         with pc4:
             st.metric("Gerçekleşmemiş P&L", f"₺{unrealized:+,.2f}")
@@ -851,6 +887,36 @@ with tab5:
             st.metric("Nakit", f"₺{_cash:,.2f}")
 
         st.markdown("")
+
+        # İstatistikler (her zaman göster — trades tablosundan hesaplanır)
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Toplam İşlem", str(ts["total_entries"]))
+        with c2:
+            wr = ts["win_rate"]
+            st.metric("Kapatılan (Kazanan)", str(ts["wins"]), delta=f"%{wr:.0f}" if ts["closed"] else None)
+        with c3:
+            st.metric("Kapatılan (Kaybeden)", str(ts["losses"]))
+        with c4:
+            st.metric(
+                "Net P&L (Canlı)",
+                f"₺{_live_total_pnl:+,.2f}",
+                delta=f"%{_live_pnl_pct:+.1f}",
+                delta_color="normal" if _live_total_pnl >= 0 else "inverse",
+            )
+
+        st.markdown("")
+
+        # Grafikleri göster — snapshot varsa detaylı, yoksa canlı tek nokta
+        if _snapshots:
+            snap_df = pd.DataFrame(_snapshots)
+        else:
+            # Snapshot yoksa canlı veriyle tek satırlık DataFrame oluştur
+            snap_df = pd.DataFrame([{
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "total_equity": _live_total_equity,
+                "total_pnl": _live_total_pnl,
+            }])
 
         c1, c2 = st.columns(2)
         with c1:
@@ -861,7 +927,7 @@ with tab5:
                     y=snap_df["total_equity"],
                     mode="lines+markers",
                     line=dict(color="#8b5cf6", width=3),
-                    marker=dict(size=6, color="#a78bfa"),
+                    marker=dict(size=8, color="#a78bfa"),
                     fill="tozeroy",
                     fillcolor="rgba(139,92,246,0.06)",
                     name="Varlık",
@@ -911,27 +977,6 @@ with tab5:
                 margin=dict(l=10, r=10, t=40, b=10),
             )
             st.plotly_chart(fig, use_container_width=True)
-
-        # İstatistikler
-        tt = _portfolio["total_trades"]
-        wt = _portfolio["winning_trades"]
-        lt = _portfolio["losing_trades"]
-        wr = (wt / tt * 100) if tt else 0
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Toplam İşlem", str(tt))
-        with c2:
-            st.metric("Kazanan", str(wt), delta=f"%{wr:.0f}" if tt else None)
-        with c3:
-            st.metric("Kaybeden", str(lt))
-        with c4:
-            # Canlı P&L kullan (snapshot yerine)
-            st.metric(
-                "Net P&L",
-                f"₺{_live_total_pnl:+,.2f}",
-                delta=f"%{_live_pnl_pct:+.1f}",
-                delta_color="normal" if _live_total_pnl >= 0 else "inverse",
-            )
 
 # ══════════════════════════════════════════════════════════════════
 # TAB 6 — ML ÖĞRENME
