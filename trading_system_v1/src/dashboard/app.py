@@ -150,26 +150,7 @@ def _load_all_data():
 
 _portfolio, _positions, _snapshots, _all_trades, _all_signals = _load_all_data()
 
-# Canlı fiyatları çek (açık pozisyon varsa)
-_pos_symbols = tuple(p["symbol"] for p in _positions)
-_live_prices = fetch_live_prices(_pos_symbols) if _pos_symbols else {}
-
-# Pozisyon detaylarını hesapla (merkezi)
-_pos_details: list = []
-_long_value: float = 0.0
-_short_unrealized: float = 0.0
-
-if _positions and _live_prices:
-    _pos_details, _long_value, _short_unrealized = _compute_position_details(
-        _positions, _live_prices
-    )
-
-# Canlı toplam varlık & P/L hesapla
-_initial_capital = _portfolio["initial_capital"] if _portfolio else 0.0
-_cash = _portfolio["cash"] if _portfolio else 0.0
-_live_total_equity = _cash + _long_value + _short_unrealized
-_live_total_pnl = _live_total_equity - _initial_capital if _initial_capital else 0.0
-_live_pnl_pct = (_live_total_pnl / _initial_capital * 100) if _initial_capital else 0.0
+# Not: Canlı fiyat çekme ve pozisyon hesaplama fonksiyonlar tanımlandıktan sonra yapılacak
 
 
 # ─── TradingView Widget Helpers ──────────────────────────────────
@@ -337,6 +318,26 @@ def _compute_position_details(positions: list[dict], live_prices: dict[str, floa
         })
 
     return details, long_value, short_unrealized
+
+
+# ─── Canlı Fiyat & Pozisyon Hesaplama (fonksiyonlar tanımlandıktan sonra) ──
+_pos_symbols = tuple(p["symbol"] for p in _positions)
+_live_prices = fetch_live_prices(_pos_symbols) if _pos_symbols else {}
+
+_pos_details: list = []
+_long_value: float = 0.0
+_short_unrealized: float = 0.0
+
+if _positions and _live_prices:
+    _pos_details, _long_value, _short_unrealized = _compute_position_details(
+        _positions, _live_prices
+    )
+
+_initial_capital = _portfolio["initial_capital"] if _portfolio else 0.0
+_cash = _portfolio["cash"] if _portfolio else 0.0
+_live_total_equity = _cash + _long_value + _short_unrealized
+_live_total_pnl = _live_total_equity - _initial_capital if _initial_capital else 0.0
+_live_pnl_pct = (_live_total_pnl / _initial_capital * 100) if _initial_capital else 0.0
 
 
 # ─── Sidebar ─────────────────────────────────────────────────────
