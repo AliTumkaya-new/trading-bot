@@ -14,6 +14,7 @@ class RiskConfig:
     default_stop_loss_pct: float = 0.025 # %2.5 sıkı stop loss
     default_take_profit_pct: float = 0.08  # %8 take profit (3:1 R/R)
     trailing_stop_pct: float = 0.015     # %1.5 trailing stop
+    crypto_leverage: int = 3             # Kripto kaldıraç (3x)
 
 
 @dataclass(slots=True)

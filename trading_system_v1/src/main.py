@@ -14,6 +14,7 @@ from data.yahoo_bist import YahooBISTAdapter
 from database.db import (
     get_open_positions,
     get_portfolio,
+    increment_trade_stats,
     init_db,
     init_portfolio,
     log_signal,
@@ -170,6 +171,7 @@ def run_cycle() -> None:
             fill = broker.submit_market_order(order=order, mark_price=current_price)
             record_trade(sym, pos.market.value, "sell", fill.quantity, fill.price, fill.fee,
                          strategy=strategy.name, metadata=json.dumps({"reason": "stop_loss"}))
+            increment_trade_stats(won=loss >= 0, pnl=loss)
             upsert_position(sym, pos.market.value, 0, 0)
             continue
 
@@ -182,6 +184,7 @@ def run_cycle() -> None:
             fill = broker.submit_market_order(order=order, mark_price=current_price)
             record_trade(sym, pos.market.value, "sell", fill.quantity, fill.price, fill.fee,
                          strategy=strategy.name, metadata=json.dumps({"reason": "take_profit"}))
+            increment_trade_stats(won=True, pnl=profit)
             upsert_position(sym, pos.market.value, 0, 0)
             continue
 
@@ -216,6 +219,7 @@ def run_cycle() -> None:
             fill = broker.submit_market_order(order=order, mark_price=current_price)
             record_trade(sym, short_data["market"].value, "buy_to_cover", fill.quantity, fill.price, fill.fee,
                          strategy=strategy.name, metadata=json.dumps({"reason": "short_stop_loss"}))
+            increment_trade_stats(won=loss >= 0, pnl=loss)
             upsert_position(sym, short_data["market"].value, 0, 0)
             continue
 
@@ -228,6 +232,7 @@ def run_cycle() -> None:
             fill = broker.submit_market_order(order=order, mark_price=current_price)
             record_trade(sym, short_data["market"].value, "buy_to_cover", fill.quantity, fill.price, fill.fee,
                          strategy=strategy.name, metadata=json.dumps({"reason": "short_take_profit"}))
+            increment_trade_stats(won=True, pnl=profit)
             upsert_position(sym, short_data["market"].value, 0, 0)
             continue
 

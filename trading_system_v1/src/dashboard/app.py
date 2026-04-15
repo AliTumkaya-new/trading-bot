@@ -18,6 +18,13 @@ import requests
 import streamlit as st
 import yfinance as yf
 
+# Auto-refresh: 60 saniyede bir sayfa otomatik yenilenir
+try:
+    from streamlit_autorefresh import st_autorefresh
+    st_autorefresh(interval=60_000, limit=None, key="live_refresh")
+except ImportError:
+    pass  # fallback: manuel yenile butonu
+
 SRC_DIR = Path(__file__).resolve().parent.parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -130,7 +137,11 @@ div[data-testid="stSidebar"] { background: var(--bg-dark); }
 init_db()
 
 # ─── Anlık Fiyat Çekme ──────────────────────────────────────────
-BINANCE_PRICE_URL = "https://api.binance.com/api/v3/ticker/price"
+BINANCE_PRICE_URLS = [
+    "https://api.binance.com/api/v3/ticker/price",
+    "https://data-api.binance.vision/api/v3/ticker/price",
+    "https://api1.binance.com/api/v3/ticker/price",
+]
 
 
 @st.cache_data(ttl=30)
@@ -138,18 +149,22 @@ def fetch_live_prices(symbols: tuple[str, ...]) -> dict[str, float]:
     """Binance ve Yahoo Finance'den anlık fiyat çek (30 sn cache)."""
     prices: dict[str, float] = {}
 
-    # Binance — kripto semboller
+    # Binance — kripto semboller (fallback destekli)
     crypto_syms = [s for s in symbols if not s.endswith(".IS")]
     if crypto_syms:
-        try:
-            resp = requests.get(BINANCE_PRICE_URL, timeout=5)
-            resp.raise_for_status()
-            all_prices = {item["symbol"]: float(item["price"]) for item in resp.json()}
-            for s in crypto_syms:
-                if s in all_prices:
-                    prices[s] = all_prices[s]
-        except Exception:
-            pass
+        for price_url in BINANCE_PRICE_URLS:
+            try:
+                resp = requests.get(price_url, timeout=5)
+                if resp.status_code == 451:
+                    continue
+                resp.raise_for_status()
+                all_prices = {item["symbol"]: float(item["price"]) for item in resp.json()}
+                for s in crypto_syms:
+                    if s in all_prices:
+                        prices[s] = all_prices[s]
+                break
+            except Exception:
+                continue
 
     # Yahoo Finance — BIST semboller
     bist_syms = [s for s in symbols if s.endswith(".IS")]
@@ -747,6 +762,43 @@ with tab4:
 
 
 # ─── Footer ──────────────────────────────────────────────────────
+
+# ─── Canlı İşlem Akışı (Sidebar Alt) ────────────────────────────
+with st.sidebar:
+    st.divider()
+    st.markdown("### 🔔 Son İşlemler")
+    recent_trades = get_all_trades()[:5]
+    if recent_trades:
+        for t in recent_trades:
+            side = t["side"]
+            if side == "buy":
+                icon = "🟢"
+            elif side == "short":
+                icon = "🔴"
+            else:
+                icon = "🟡"
+            time_str = (t["created_at"] or "")[:16].replace("T", " ")
+            st.caption(f"{icon} **{t['symbol']}** · ₺{t['notional']:,.0f} · {time_str}")
+    else:
+        st.caption("Henüz işlem yok")
+
+    st.markdown("### 📡 Son Sinyaller")
+    recent_sigs = get_recent_signals(limit=5)
+    if recent_sigs:
+        for s in recent_sigs:
+            sig_type = s.get("signal_type", "flat")
+            if sig_type == "long":
+                icon = "🟢"
+            elif sig_type == "short":
+                icon = "🔴"
+            else:
+                icon = "⚪"
+            score = s.get("composite_score", 0) or 0
+            conf = s.get("confidence", 0) or 0
+            st.caption(f"{icon} **{s['symbol']}** · Skor: {score:.0f} · Güven: {conf:.0f}%")
+    else:
+        st.caption("Henüz sinyal yok")
+
 st.divider()
 st.caption(
     f"⚡ Trading Platform v4 · Anlık Fiyat Takibi · "

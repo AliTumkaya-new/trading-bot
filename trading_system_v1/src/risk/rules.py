@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from core.config import RiskConfig
-from core.models import RiskDecision, Signal, SignalType
+from core.models import MarketType, RiskDecision, Signal, SignalType
 
 
 class RiskManager:
@@ -51,6 +51,12 @@ class RiskManager:
             max_position_by_capital,
             (per_trade_risk_budget / max(stop_loss_pct, 1e-9)) * confidence_mult,
         )
+
+        # Kripto kaldıraç uygula
+        leverage = 1
+        if signal.market == MarketType.CRYPTO and self.config.crypto_leverage > 1:
+            leverage = self.config.crypto_leverage
+            max_position_notional *= leverage
 
         # Score-based filter: don't risk money on weak signals
         composite_score = abs(signal.score)

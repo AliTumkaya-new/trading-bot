@@ -6,3 +6,4 @@ websocket-client>=1.8.0
 PyYAML>=6.0.2
 streamlit>=1.38.0
 plotly>=5.22.0
+streamlit-autorefresh>=1.0.1
