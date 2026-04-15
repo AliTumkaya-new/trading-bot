@@ -5,7 +5,10 @@ import signal
 import sys
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# Türkiye saat dilimi (UTC+3)
+_TZ_TR = timezone(timedelta(hours=3))
 
 from core.config import AppConfig
 from core.models import MarketType, OrderRequest, Side, SignalType
@@ -54,6 +57,18 @@ def _ml_record_closure(
     all_results: list,
 ) -> None:
     """Kapanan bir işlem için ML öğrenme kaydı oluştur."""
+
+
+def _is_bist_open() -> bool:
+    """BIST açık mı kontrol et (Pazartesi-Cuma, 10:00-18:00 Türkiye saati)."""
+    now_tr = datetime.now(_TZ_TR)
+    # Hafta sonu: Cumartesi=5, Pazar=6
+    if now_tr.weekday() >= 5:
+        return False
+    # Saat kontrolü: 10:00 - 18:00
+    if now_tr.hour < 10 or now_tr.hour >= 18:
+        return False
+    return True
     # Son sinyalden indikatör skorlarını bul
     indicator_scores = {}
     composite_score = 0.0
@@ -456,6 +471,14 @@ def run_cycle() -> None:
 
     for signal, df in top_candidates[:3]:  # max 3 new trades per cycle
         total_open = len(broker.positions) + len(broker.short_positions)
+
+        # BIST piyasa saati kontrolü: borsa kapalıyken BIST işlemi açma
+        if signal.market == MarketType.BIST and not _is_bist_open():
+            now_tr = datetime.now(_TZ_TR)
+            logger.info("🕐 BIST KAPALI: %s — Borsa İstanbul şu an kapalı (%s). İşlem açılmadı.",
+                        signal.symbol, now_tr.strftime("%A %H:%M"))
+            continue
+
         decision = risk.evaluate(signal, current_open_positions=total_open)
         last_close = float(df.iloc[-1]["close"])
 
