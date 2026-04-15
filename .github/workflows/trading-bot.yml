@@ -1,0 +1,51 @@
+name: Trading Bot 7/24
+
+on:
+  schedule:
+    # Her 4 saatte bir çalış (UTC): 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
+    - cron: '0 */4 * * *'
+  workflow_dispatch:  # Manuel tetikleme butonu
+
+permissions:
+  contents: write
+
+jobs:
+  trade-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: trading_system_v1/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r trading_system_v1/requirements.txt
+
+      - name: Run trading cycle
+        working-directory: trading_system_v1/src
+        env:
+          PYTHONUNBUFFERED: '1'
+          TZ: Europe/Istanbul
+        run: python main.py --once
+
+      - name: Save DB to repo
+        run: |
+          git config user.name "trading-bot"
+          git config user.email "bot@trading.local"
+          git add -f trading_system_v1/data/trades.db
+          if git diff --cached --quiet; then
+            echo "No DB changes to commit"
+          else
+            git commit -m "bot: trade cycle $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git pull --rebase
+            git push
+          fi

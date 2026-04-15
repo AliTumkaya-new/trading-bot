@@ -1,0 +1,32 @@
+services:
+  trader:
+    build: .
+    container_name: trading-bot
+    restart: always
+    volumes:
+      - trade-data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Europe/Istanbul
+      - BINANCE_BASE_URL=https://api.binance.com
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  dashboard:
+    build: .
+    container_name: trading-dashboard
+    restart: always
+    ports:
+      - "8501:8501"
+    volumes:
+      - trade-data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Europe/Istanbul
+    command: ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+
+volumes:
+  trade-data:
