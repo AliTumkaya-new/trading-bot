@@ -18,6 +18,7 @@ from database.db import (
     _conn as db_conn,
     get_open_positions,
     get_portfolio,
+    get_todays_realized_pnl,
     increment_trade_stats,
     init_db,
     init_portfolio,
@@ -111,7 +112,15 @@ def run_cycle() -> None:
     portfolio = get_portfolio()
     cash = portfolio["cash"] if portfolio else config.risk.capital_tl
 
-    broker = PaperBroker(cash=cash)
+    # Günlük P&L'yi DB'den yükle (GitHub Actions her seferinde yeni broker oluşturur)
+    todays_pnl = get_todays_realized_pnl()
+    broker = PaperBroker(
+        cash=cash,
+        daily_pnl=todays_pnl,
+        daily_loss_limit=-config.risk.daily_loss_limit_tl,
+    )
+    if todays_pnl != 0:
+        logger.info("📊 Bugünkü gerçekleşen P&L: %+.2f TL", todays_pnl)
 
     # Restore open positions into broker
     db_positions = get_open_positions()
@@ -757,7 +766,12 @@ def run_monitor() -> None:
 
     portfolio = get_portfolio()
     cash = portfolio["cash"] if portfolio else config.risk.capital_tl
-    broker = PaperBroker(cash=cash)
+    todays_pnl = get_todays_realized_pnl()
+    broker = PaperBroker(
+        cash=cash,
+        daily_pnl=todays_pnl,
+        daily_loss_limit=-config.risk.daily_loss_limit_tl,
+    )
 
     db_positions = get_open_positions()
     if not db_positions:

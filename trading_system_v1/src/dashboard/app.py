@@ -342,34 +342,48 @@ _live_pnl_pct = (_live_total_pnl / _initial_capital * 100) if _initial_capital e
 
 # ─── Trade Stats Hesaplama (trades tablosundan) ─────────────────
 def _compute_trade_stats(trades: list[dict]) -> dict:
-    """Gerçek trade kayıtlarından istatistik hesapla."""
-    buy_entries: dict[str, float] = {}  # symbol -> avg entry price
-    sell_count = 0
-    win_count = 0
-    loss_count = 0
+    """Gerçek trade kayıtlarından istatistik hesapla.
+    Pozisyon bazlı: aynı sembolün tüm satışlarını tek pozisyon olarak gruplar."""
+    buy_entries: dict[str, float] = {}     # symbol -> avg entry price (LONG)
+    short_entries: dict[str, float] = {}   # symbol -> avg entry price (SHORT)
+    position_pnl: dict[str, float] = {}    # symbol -> toplam pnl
     total_realized = 0.0
+    buy_count = 0
 
     for t in reversed(trades):  # eskiden yeniye sıralı
         sym = t["symbol"]
         if t["side"] == "buy":
             buy_entries[sym] = t["price"]
+            buy_count += 1
+        elif t["side"] == "short":
+            short_entries[sym] = t["price"]
+            buy_count += 1  # SHORT açma da pozisyon açma sayılır
+        elif t["side"] == "buy_to_cover":
+            # SHORT kapatma
+            entry = short_entries.get(sym, 0)
+            if entry:
+                pnl = (entry - t["price"]) * t["quantity"]
+                position_pnl[sym] = position_pnl.get(sym, 0.0) + pnl
+                total_realized += pnl
         elif t["side"] in ("sell", "cover"):
-            sell_count += 1
+            # LONG kapatma
             entry = buy_entries.get(sym, 0)
             if entry:
                 pnl = (t["price"] - entry) * t["quantity"]
+                position_pnl[sym] = position_pnl.get(sym, 0.0) + pnl
                 total_realized += pnl
-                if pnl >= 0:
-                    win_count += 1
-                else:
-                    loss_count += 1
+
+    # Kapanan pozisyon sayısı (sembol bazlı)
+    closed_positions = len(position_pnl)
+    win_count = sum(1 for pnl in position_pnl.values() if pnl >= 0)
+    loss_count = sum(1 for pnl in position_pnl.values() if pnl < 0)
 
     return {
-        "total_entries": len(trades),
-        "closed": sell_count,
+        "total_entries": buy_count,
+        "closed": closed_positions,
         "wins": win_count,
         "losses": loss_count,
-        "win_rate": (win_count / sell_count * 100) if sell_count else 0,
+        "win_rate": (win_count / closed_positions * 100) if closed_positions else 0,
         "realized_pnl": total_realized,
     }
 
@@ -465,11 +479,12 @@ with tab1:
             ts = _trade_stats
             wr = ts["win_rate"]
             wr_cls = "g" if wr >= 50 else "r"
+            open_count = ts["total_entries"] - ts["closed"]
             st.markdown(
                 f"""<div class="top-card">
                 <p class="label">İşlem / Win Rate</p>
-                <p class="value y">{ts['total_entries']} işlem</p>
-                <p class="sub {wr_cls}">%{wr:.0f} başarı ({ts['closed']} kapatılan: {ts['wins']}W / {ts['losses']}L)</p>
+                <p class="value y">{ts['closed']} kapatılan · {open_count} açık</p>
+                <p class="sub {wr_cls}">%{wr:.0f} başarı ({ts['wins']}W / {ts['losses']}L)</p>
             </div>""",
                 unsafe_allow_html=True,
             )
@@ -891,12 +906,13 @@ with tab5:
         # İstatistikler (her zaman göster — trades tablosundan hesaplanır)
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.metric("Toplam İşlem", str(ts["total_entries"]))
+            open_cnt = ts["total_entries"] - ts["closed"]
+            st.metric("Açılan", str(ts["total_entries"]), delta=f"{open_cnt} açık" if open_cnt else None)
         with c2:
             wr = ts["win_rate"]
-            st.metric("Kapatılan (Kazanan)", str(ts["wins"]), delta=f"%{wr:.0f}" if ts["closed"] else None)
+            st.metric("Kazanan", str(ts["wins"]), delta=f"%{wr:.0f} win rate" if ts["closed"] else None)
         with c3:
-            st.metric("Kapatılan (Kaybeden)", str(ts["losses"]))
+            st.metric("Kaybeden", str(ts["losses"]))
         with c4:
             st.metric(
                 "Net P&L (Canlı)",

@@ -196,6 +196,36 @@ def get_all_trades() -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def get_todays_realized_pnl() -> float:
+    """Bugün kapanan işlemlerden gerçekleşen P&L hesapla."""
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with _conn() as con:
+        sells = con.execute(
+            "SELECT symbol, side, quantity, price FROM trades WHERE side IN ('sell','cover','buy_to_cover') AND created_at >= ?",
+            (today,),
+        ).fetchall()
+        total_pnl = 0.0
+        for s in sells:
+            if s["side"] == "buy_to_cover":
+                # SHORT kapatma: entry(short sell) - exit(buy_to_cover)
+                short_entry = con.execute(
+                    "SELECT price FROM trades WHERE symbol=? AND side='short' ORDER BY created_at DESC LIMIT 1",
+                    (s["symbol"],),
+                ).fetchone()
+                if short_entry:
+                    total_pnl += (short_entry["price"] - s["price"]) * s["quantity"]
+            else:
+                # LONG kapatma: exit(sell) - entry(buy)
+                buy = con.execute(
+                    "SELECT price FROM trades WHERE symbol=? AND side='buy' ORDER BY created_at DESC LIMIT 1",
+                    (s["symbol"],),
+                ).fetchone()
+                if buy:
+                    total_pnl += (s["price"] - buy["price"]) * s["quantity"]
+        return total_pnl
+
+
 def get_trades_for_symbol(symbol: str) -> List[Dict[str, Any]]:
     with _conn() as con:
         rows = con.execute(
