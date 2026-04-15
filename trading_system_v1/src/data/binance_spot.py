@@ -19,22 +19,45 @@ class BinanceSpotAdapter(MarketDataAdapter):
         "1d": "1d",
     }
 
+    # Fallback URL'ler — ana API engellenirse sırayla dener
+    FALLBACK_URLS = [
+        "https://data-api.binance.vision",
+        "https://api1.binance.com",
+        "https://api2.binance.com",
+        "https://api3.binance.com",
+    ]
+
     def __init__(self, config: AppConfig, timeout: int = 10) -> None:
         self.config = config
         self.timeout = timeout
 
     def fetch_ohlcv(self, symbol: str, interval: str, limit: int = 500) -> pd.DataFrame:
         mapped_interval = self.INTERVAL_MAP.get(interval, interval)
-        url = f"{self.config.binance_base_url}/api/v3/klines"
         params = {
             "symbol": symbol.upper(),
             "interval": mapped_interval,
             "limit": limit,
         }
 
-        response = requests.get(url, params=params, timeout=self.timeout)
-        response.raise_for_status()
-        raw = response.json()
+        # Ana URL + fallback'ler
+        urls_to_try = [self.config.binance_base_url] + self.FALLBACK_URLS
+        last_error = None
+
+        for base_url in urls_to_try:
+            url = f"{base_url}/api/v3/klines"
+            try:
+                response = requests.get(url, params=params, timeout=self.timeout)
+                if response.status_code == 451:
+                    last_error = f"HTTP 451 from {base_url}"
+                    continue
+                response.raise_for_status()
+                raw = response.json()
+                break
+            except requests.exceptions.RequestException as e:
+                last_error = str(e)
+                continue
+        else:
+            raise ConnectionError(f"All Binance endpoints failed. Last error: {last_error}")
 
         df = pd.DataFrame(
             raw,
