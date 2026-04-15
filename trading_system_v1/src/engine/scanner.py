@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Iterable, List, Tuple
 
 import pandas as pd
@@ -7,6 +8,8 @@ import pandas as pd
 from core.models import MarketType, Signal, SignalType
 from data.base import MarketDataAdapter
 from strategies.base import Strategy
+
+logger = logging.getLogger("trading_system")
 
 
 class MarketScanner:
@@ -18,9 +21,13 @@ class MarketScanner:
     def scan(self, symbols: Iterable[str], interval: str, limit: int) -> List[Tuple[Signal, pd.DataFrame]]:
         results: List[Tuple[Signal, pd.DataFrame]] = []
         for symbol in symbols:
-            df = self.adapter.fetch_ohlcv(symbol=symbol, interval=interval, limit=limit)
-            signal = self.strategy.generate(symbol=symbol, market=self.market, df=df)
-            results.append((signal, df))
+            try:
+                df = self.adapter.fetch_ohlcv(symbol=symbol, interval=interval, limit=limit)
+                signal = self.strategy.generate(symbol=symbol, market=self.market, df=df)
+                results.append((signal, df))
+            except Exception as e:
+                logger.warning("⚠️ %s veri alınamadı, atlanıyor: %s", symbol, e)
+                continue
         return sorted(results, key=lambda item: item[0].score, reverse=True)
 
     @staticmethod
