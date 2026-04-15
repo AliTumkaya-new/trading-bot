@@ -19,6 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -31,6 +32,36 @@ jobs:
         run: |
           pip install -r trading_system_v1/requirements.txt
           python -c "import pandas; import yfinance; import requests; print('All packages OK')"
+
+      - name: Diagnostics
+        working-directory: trading_system_v1/src
+        run: |
+          echo "=== Python version ==="
+          python --version
+          echo "=== Working directory ==="
+          pwd
+          echo "=== Files ==="
+          ls -la
+          echo "=== Git commit ==="
+          git log --oneline -1
+          echo "=== Test imports ==="
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from core.config import AppConfig
+          from core.models import MarketType
+          print('Imports OK')
+          cfg = AppConfig()
+          print(f'Binance URL: {cfg.binance_base_url}')
+          print(f'Crypto symbols: {len(cfg.scanner.crypto_symbols)}')
+          print(f'BIST symbols: {len(cfg.scanner.bist_symbols)}')
+          "
+          echo "=== Network test ==="
+          python -c "
+          import requests
+          r = requests.get('https://api.binance.com/api/v3/ping', timeout=10)
+          print(f'Binance ping: {r.status_code}')
+          " || echo "Binance unreachable!"
 
       - name: Run trading cycle
         working-directory: trading_system_v1/src
