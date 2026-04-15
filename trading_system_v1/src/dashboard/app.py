@@ -262,7 +262,7 @@ def _pnl_arrow(val: float) -> str:
 
 
 def _compute_position_details(positions: list[dict], live_prices: dict[str, float]):
-    """Her pozisyon için giriş/anlık fiyat, P&L hesapla."""
+    """Her pozisyon için giriş/anlık fiyat, P&L hesapla. Kaldıraçlı pozisyonlarda margin bazlı."""
     details = []
     long_value = 0.0
     short_unrealized = 0.0
@@ -272,16 +272,19 @@ def _compute_position_details(positions: list[dict], live_prices: dict[str, floa
         entry = p["avg_price"]
         qty = p["quantity"]
         direction = p.get("direction", "long")
+        lev = p.get("leverage") or 1
         current = live_prices.get(sym, entry)
+        entry_notional = entry * qty
+        margin = entry_notional / lev if lev > 1 else entry_notional
 
         if direction == "short":
             pnl_val = (entry - current) * qty
             pnl_pct = ((entry - current) / entry * 100) if entry else 0
-            short_unrealized += pnl_val
+            short_unrealized += margin + pnl_val
         else:
             pnl_val = (current - entry) * qty
             pnl_pct = ((current - entry) / entry * 100) if entry else 0
-            long_value += current * qty
+            long_value += margin + pnl_val
 
         details.append({
             "symbol": sym,
@@ -289,6 +292,8 @@ def _compute_position_details(positions: list[dict], live_prices: dict[str, floa
             "entry": entry,
             "current": current,
             "qty": qty,
+            "leverage": lev,
+            "margin": margin,
             "pnl_val": pnl_val,
             "pnl_pct": pnl_pct,
             "stop_loss": p.get("stop_loss") or 0,
@@ -482,18 +487,20 @@ with tab1:
 
                 sl_txt = f"SL: {d['stop_loss']:.4f}" if d["stop_loss"] else "SL: —"
                 tp_txt = f"TP: {d['take_profit']:.4f}" if d["take_profit"] else "TP: —"
+                lev_txt = f"{d['leverage']}x" if d.get("leverage", 1) > 1 else ""
 
                 st.markdown(
                     f"""
                 <div class="pos-row">
                     <div>
                         <span class="pos-badge {badge}">{dir_text}</span>
+                        {f'<span class="pos-badge" style="background:rgba(139,92,246,0.15);color:#8b5cf6;margin-left:4px;">{lev_txt}</span>' if lev_txt else ''}
                         <span class="pos-symbol w" style="margin-left:8px;">{d['symbol']}</span>
                     </div>
                     <div style="text-align:center;">
                         <span class="pos-detail">Giriş: <b class="w">{d['entry']:.4f}</b></span>
                         <span class="pos-detail" style="margin-left:16px;">Anlık: <b class="y">{d['current']:.4f}</b></span>
-                        <span class="pos-detail" style="margin-left:16px;">Miktar: <b class="w">{d['qty']:.4f}</b></span>
+                        <span class="pos-detail" style="margin-left:16px;">Margin: <b class="p">₺{d['margin']:,.2f}</b></span>
                     </div>
                     <div style="text-align:center;">
                         <span class="pos-detail">{sl_txt}</span>
@@ -608,8 +615,10 @@ with tab3:
             entry = p["avg_price"]
             qty = p["quantity"]
             direction = p.get("direction", "long")
+            lev = p.get("leverage") or 1
             current = live_prices.get(sym, entry)
             notional = qty * entry
+            margin = notional / lev if lev > 1 else notional
 
             if direction == "short":
                 pnl = (entry - current) * qty
@@ -623,10 +632,11 @@ with tab3:
                     "Yön": f"{'🟢 LONG' if direction == 'long' else '🔴 SHORT'}",
                     "Sembol": sym,
                     "Piyasa": p["market"].upper(),
+                    "Kaldıraç": f"{lev}x",
                     "Miktar": qty,
                     "Giriş Fiyatı": entry,
                     "Anlık Fiyat": current,
-                    "Tutar (₺)": notional,
+                    "Margin (₺)": margin,
                     "K/Z (₺)": pnl,
                     "K/Z (%)": pnl_pct,
                     "Stop-Loss": p.get("stop_loss") or 0,
@@ -644,7 +654,7 @@ with tab3:
                     "Miktar": "{:.4f}",
                     "Giriş Fiyatı": "{:.4f}",
                     "Anlık Fiyat": "{:.4f}",
-                    "Tutar (₺)": "₺{:,.2f}",
+                    "Margin (₺)": "₺{:,.2f}",
                     "K/Z (₺)": "₺{:+,.2f}",
                     "K/Z (%)": "%{:+.2f}",
                     "Stop-Loss": "{:.4f}",
@@ -673,7 +683,7 @@ with tab3:
             fig = go.Figure(
                 go.Pie(
                     labels=df["Sembol"],
-                    values=df["Tutar (₺)"].abs(),
+                    values=df["Margin (₺)"].abs(),
                     hole=0.45,
                     marker=dict(
                         colors=[

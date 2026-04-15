@@ -101,6 +101,11 @@ def init_db() -> None:
             con.execute("ALTER TABLE positions ADD COLUMN direction TEXT NOT NULL DEFAULT 'long'")
         except Exception:
             pass  # column already exists
+        # Migration: add leverage column to positions
+        try:
+            con.execute("ALTER TABLE positions ADD COLUMN leverage INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass  # column already exists
 
 
 # ---------- Portfolio ----------
@@ -196,6 +201,7 @@ def upsert_position(
     take_profit: Optional[float] = None,
     realized_pnl: float = 0.0,
     direction: str = "long",
+    leverage: int = 1,
 ) -> None:
     now = _now_iso()
     with _conn() as con:
@@ -206,16 +212,16 @@ def upsert_position(
             else:
                 con.execute(
                     """UPDATE positions SET quantity=?, avg_price=?, stop_loss=?,
-                       take_profit=?, realized_pnl=realized_pnl+?, direction=?, updated_at=? WHERE symbol=?""",
-                    (quantity, avg_price, stop_loss, take_profit, realized_pnl, direction, now, symbol),
+                       take_profit=?, realized_pnl=realized_pnl+?, direction=?, leverage=?, updated_at=? WHERE symbol=?""",
+                    (quantity, avg_price, stop_loss, take_profit, realized_pnl, direction, leverage, now, symbol),
                 )
         else:
             if quantity > 0:
                 con.execute(
                     """INSERT INTO positions
-                       (symbol, market, quantity, avg_price, entry_time, stop_loss, take_profit, realized_pnl, direction, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (symbol, market, quantity, avg_price, now, stop_loss, take_profit, realized_pnl, direction, now),
+                       (symbol, market, quantity, avg_price, entry_time, stop_loss, take_profit, realized_pnl, direction, leverage, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (symbol, market, quantity, avg_price, now, stop_loss, take_profit, realized_pnl, direction, leverage, now),
                 )
 
 

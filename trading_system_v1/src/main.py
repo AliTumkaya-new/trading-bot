@@ -64,6 +64,7 @@ def run_cycle() -> None:
                 "quantity": pos["quantity"],
                 "entry_price": pos["avg_price"],
                 "market": MarketType(pos["market"]),
+                "leverage": pos.get("leverage") or 1,
             }
         else:
             from core.models import Position
@@ -343,26 +344,38 @@ def run_cycle() -> None:
             stop_loss=stop_price,
             take_profit=tp_price,
             direction="short" if is_short else "long",
+            leverage=leverage,
         )
 
     # --- Portfolio summary ---
     update_portfolio_cash(broker.cash)
 
-    positions_value = 0.0
-    # SHORT positions value
+    positions_value = 0.0  # margin + unrealized P&L
+    # SHORT positions: margin + unrealized P&L
     short_unrealized = 0.0
     for sym, short_data in broker.short_positions.items():
         for signal, df in all_results:
             if signal.symbol == sym:
                 current_price = float(df.iloc[-1]["close"])
-                short_unrealized += (short_data["entry_price"] - current_price) * short_data["quantity"]
+                lev = short_data.get("leverage", 1)
+                entry_notional = short_data["entry_price"] * short_data["quantity"]
+                margin = entry_notional / lev if lev > 1 else entry_notional
+                pnl = (short_data["entry_price"] - current_price) * short_data["quantity"]
+                short_unrealized += margin + pnl
                 break
 
+    # LONG positions: margin + unrealized P&L
     for sym, pos in broker.positions.items():
         for signal, df in all_results:
             if signal.symbol == sym:
                 current_price = float(df.iloc[-1]["close"])
-                positions_value += pos.quantity * current_price
+                # Kaldıraç bilgisi: DB'den veya varsayılan
+                db_p = next((p for p in db_positions if p["symbol"] == sym), None)
+                lev = (db_p.get("leverage") or 1) if db_p else 1
+                entry_notional = pos.avg_price * pos.quantity
+                margin = entry_notional / lev if lev > 1 else entry_notional
+                pnl = (current_price - pos.avg_price) * pos.quantity
+                positions_value += margin + pnl
                 break
 
     total_equity = broker.cash + positions_value + short_unrealized
