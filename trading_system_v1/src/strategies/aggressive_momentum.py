@@ -22,7 +22,7 @@ Skor: -100 … +100
 """
 
 import math
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -59,6 +59,18 @@ class AggressiveMomentumStrategy(Strategy):
     }
 
     MIN_BARS = 60
+
+    def __init__(self, learned_weights: Optional[Dict[str, float]] = None):
+        """
+        Parameters
+        ----------
+        learned_weights : dict, optional
+            ML öğrenme modülünden gelen optimize edilmiş ağırlıklar.
+            None ise varsayılan ağırlıklar kullanılır.
+        """
+        if learned_weights:
+            self.WEIGHTS = dict(learned_weights)
+            self.name = "aggressive_momentum_v3_ml"
 
     def generate(self, symbol: str, market: MarketType, df: pd.DataFrame) -> Signal:
         if len(df) < self.MIN_BARS:

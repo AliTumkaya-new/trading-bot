@@ -12,6 +12,7 @@ from core.models import MarketType, OrderRequest, Side, SignalType
 from data.binance_spot import BinanceSpotAdapter
 from data.yahoo_bist import YahooBISTAdapter
 from database.db import (
+    _conn as db_conn,
     get_open_positions,
     get_portfolio,
     increment_trade_stats,
@@ -25,6 +26,7 @@ from database.db import (
 )
 from engine.scanner import MarketScanner
 from execution.paper_broker import PaperBroker
+from ml.learner import AdaptiveLearner
 from risk.rules import RiskManager
 from strategies.aggressive_momentum import AggressiveMomentumStrategy
 from utils.logging_utils import get_logger
@@ -42,14 +44,55 @@ def _print_header(title: str) -> None:
     logger.info(SEPARATOR)
 
 
+def _ml_record_closure(
+    learner: AdaptiveLearner,
+    symbol: str,
+    market: str,
+    direction: str,
+    pnl: float,
+    pnl_pct: float,
+    all_results: list,
+) -> None:
+    """Kapanan bir işlem için ML öğrenme kaydı oluştur."""
+    # Son sinyalden indikatör skorlarını bul
+    indicator_scores = {}
+    composite_score = 0.0
+    confidence = 0.0
+    for sig, _ in all_results:
+        if sig.symbol == symbol:
+            indicator_scores = sig.metadata.get("indicator_scores", {})
+            composite_score = sig.metadata.get("composite_score", 0.0)
+            confidence = sig.metadata.get("confidence_pct", 0.0)
+            break
+
+    if indicator_scores:
+        learner.record_outcome(
+            symbol=symbol,
+            market=market,
+            direction=direction,
+            pnl=pnl,
+            pnl_pct=pnl_pct,
+            indicator_scores=indicator_scores,
+            composite_score=composite_score,
+            confidence=confidence,
+        )
+
+
 def run_cycle() -> None:
     config = AppConfig()
-    strategy = AggressiveMomentumStrategy()
-    risk = RiskManager(config.risk)
 
     # --- DB init ---
     init_db()
     init_portfolio(config.risk.capital_tl)
+
+    # --- ML Learner başlat ve öğrenilmiş ağırlıkları yükle ---
+    learner = AdaptiveLearner(db_conn)
+    learned_weights = learner.get_learned_weights()
+    strategy = AggressiveMomentumStrategy(learned_weights=learned_weights)
+    risk = RiskManager(config.risk)
+
+    logger.info("🧠 ML Ağırlıklar: %s", {k: f"{v:.3f}" for k, v in learned_weights.items()})
+
     portfolio = get_portfolio()
     cash = portfolio["cash"] if portfolio else config.risk.capital_tl
 
@@ -166,6 +209,7 @@ def run_cycle() -> None:
         # Stop-loss hit
         if sl and current_price <= sl:
             loss = (current_price - pos.avg_price) * pos.quantity
+            loss_pct = pnl_pct * 100
             logger.info("🛑 STOP-LOSS: %s | Giriş: %.4f | Çıkış: %.4f | Zarar: %.2f TL",
                         sym, pos.avg_price, current_price, loss)
             order = OrderRequest(symbol=sym, market=pos.market, side=Side.SELL, quantity=pos.quantity)
@@ -173,12 +217,15 @@ def run_cycle() -> None:
             record_trade(sym, pos.market.value, "sell", fill.quantity, fill.price, fill.fee,
                          strategy=strategy.name, metadata=json.dumps({"reason": "stop_loss"}))
             increment_trade_stats(won=loss >= 0, pnl=loss)
+            # ML: kapanan işlemden öğren
+            _ml_record_closure(learner, sym, pos.market.value, "long", loss, loss_pct, all_results)
             upsert_position(sym, pos.market.value, 0, 0)
             continue
 
         # Take-profit hit
         if tp and current_price >= tp:
             profit = (current_price - pos.avg_price) * pos.quantity
+            profit_pct = pnl_pct * 100
             logger.info("🎯 TAKE-PROFIT: %s | Giriş: %.4f | Çıkış: %.4f | Kâr: %.2f TL",
                         sym, pos.avg_price, current_price, profit)
             order = OrderRequest(symbol=sym, market=pos.market, side=Side.SELL, quantity=pos.quantity)
@@ -186,6 +233,8 @@ def run_cycle() -> None:
             record_trade(sym, pos.market.value, "sell", fill.quantity, fill.price, fill.fee,
                          strategy=strategy.name, metadata=json.dumps({"reason": "take_profit"}))
             increment_trade_stats(won=True, pnl=profit)
+            # ML: kapanan işlemden öğren
+            _ml_record_closure(learner, sym, pos.market.value, "long", profit, profit_pct, all_results)
             upsert_position(sym, pos.market.value, 0, 0)
             continue
 
@@ -214,6 +263,7 @@ def run_cycle() -> None:
         # SHORT stop-loss: price went UP beyond stop
         if sl and current_price >= sl:
             loss = (entry - current_price) * qty
+            loss_pct = pnl_pct * 100
             logger.info("🛑 SHORT STOP-LOSS: %s | Giriş: %.4f | Çıkış: %.4f | Zarar: %.2f TL",
                         sym, entry, current_price, loss)
             order = OrderRequest(symbol=sym, market=short_data["market"], side=Side.BUY, quantity=qty)
@@ -221,12 +271,14 @@ def run_cycle() -> None:
             record_trade(sym, short_data["market"].value, "buy_to_cover", fill.quantity, fill.price, fill.fee,
                          strategy=strategy.name, metadata=json.dumps({"reason": "short_stop_loss"}))
             increment_trade_stats(won=loss >= 0, pnl=loss)
+            _ml_record_closure(learner, sym, short_data["market"].value, "short", loss, loss_pct, all_results)
             upsert_position(sym, short_data["market"].value, 0, 0)
             continue
 
         # SHORT take-profit: price went DOWN to target
         if tp and current_price <= tp:
             profit = (entry - current_price) * qty
+            profit_pct = pnl_pct * 100
             logger.info("🎯 SHORT TAKE-PROFIT: %s | Giriş: %.4f | Çıkış: %.4f | Kâr: %.2f TL",
                         sym, entry, current_price, profit)
             order = OrderRequest(symbol=sym, market=short_data["market"], side=Side.BUY, quantity=qty)
@@ -234,6 +286,7 @@ def run_cycle() -> None:
             record_trade(sym, short_data["market"].value, "buy_to_cover", fill.quantity, fill.price, fill.fee,
                          strategy=strategy.name, metadata=json.dumps({"reason": "short_take_profit"}))
             increment_trade_stats(won=True, pnl=profit)
+            _ml_record_closure(learner, sym, short_data["market"].value, "short", profit, profit_pct, all_results)
             upsert_position(sym, short_data["market"].value, 0, 0)
             continue
 
@@ -257,6 +310,21 @@ def run_cycle() -> None:
         if not decision.allowed:
             logger.info("❌ RED: %s — %s", signal.symbol, decision.reason)
             continue
+
+        # ML filtreleme: modelin onayı var mı?
+        indicator_scores = signal.metadata.get("indicator_scores", {})
+        ml_allowed, ml_reason = learner.should_trade(
+            signal.symbol, indicator_scores, signal.score,
+        )
+        if not ml_allowed:
+            logger.info("🧠 ML RED: %s — %s", signal.symbol, ml_reason)
+            continue
+
+        # RF tahmin bilgisi
+        rf_pred = learner.predict_signal_quality(indicator_scores)
+        if rf_pred:
+            logger.info("🧠 ML TAHMİN: %s | Kazanma: %.0f%% | Güven: %.0f%%",
+                        signal.symbol, rf_pred["win_probability"] * 100, rf_pred["model_confidence"])
 
         quantity = decision.max_position_notional / last_close if last_close else 0.0
         if quantity <= 0:
@@ -350,6 +418,9 @@ def run_cycle() -> None:
     # --- Portfolio summary ---
     update_portfolio_cash(broker.cash)
 
+    # Yeni açılan pozisyonlar dahil güncel DB verisini yükle
+    db_positions_fresh = get_open_positions()
+
     positions_value = 0.0  # margin + unrealized P&L
     # SHORT positions: margin + unrealized P&L
     short_unrealized = 0.0
@@ -369,8 +440,8 @@ def run_cycle() -> None:
         for signal, df in all_results:
             if signal.symbol == sym:
                 current_price = float(df.iloc[-1]["close"])
-                # Kaldıraç bilgisi: DB'den veya varsayılan
-                db_p = next((p for p in db_positions if p["symbol"] == sym), None)
+                # Kaldıraç bilgisi: güncel DB'den
+                db_p = next((p for p in db_positions_fresh if p["symbol"] == sym), None)
                 lev = (db_p.get("leverage") or 1) if db_p else 1
                 entry_notional = pos.avg_price * pos.quantity
                 margin = entry_notional / lev if lev > 1 else entry_notional

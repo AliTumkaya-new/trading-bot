@@ -344,8 +344,8 @@ with st.sidebar:
 components.html(_tradingview_ticker_tape(), height=78, scrolling=False)
 
 # ─── Tabs ────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["📊 Anlık Durum", "📺 Canlı Grafik", "💼 Pozisyonlar", "📜 İşlem Geçmişi", "📈 Performans"]
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["📊 Anlık Durum", "📺 Canlı Grafik", "💼 Pozisyonlar", "📜 İşlem Geçmişi", "📈 Performans", "🧠 ML Öğrenme"]
 )
 
 # ══════════════════════════════════════════════════════════════════
@@ -891,6 +891,150 @@ with tab5:
                 f"₺{net_pnl:+,.2f}",
                 delta_color="normal" if net_pnl >= 0 else "inverse",
             )
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 6 — ML ÖĞRENME
+# ══════════════════════════════════════════════════════════════════
+with tab6:
+    try:
+        from ml.learner import AdaptiveLearner, DEFAULT_WEIGHTS
+        from database.db import _conn as _db_conn
+
+        _learner = AdaptiveLearner(_db_conn)
+        ml_summary = _learner.get_learning_summary()
+
+        st.markdown("### 🧠 Adaptif ML Öğrenme Sistemi")
+        st.caption("Sistem her kapanan işlemden öğrenir ve indikatör ağırlıklarını otomatik optimize eder.")
+
+        # --- Üst metrikler ---
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        with mc1:
+            st.metric("Toplam Güncelleme", str(ml_summary["total_weight_updates"]))
+        with mc2:
+            st.metric("Kazanma Oranı", f"%{ml_summary['stats']['win_rate']:.1f}" if ml_summary['stats']['total'] else "—")
+        with mc3:
+            st.metric("Ort. P&L", f"%{ml_summary['stats']['avg_pnl']:+.2f}" if ml_summary['stats']['total'] else "—")
+        with mc4:
+            rf_label = "🟢 Aktif" if ml_summary["rf_model_status"] == "active" else "🟡 Veri Bekliyor"
+            st.metric("RF Model", rf_label)
+
+        st.divider()
+
+        # --- Ağırlık karşılaştırma ---
+        wc1, wc2 = st.columns(2)
+        with wc1:
+            st.markdown("#### Güncel vs Varsayılan Ağırlıklar")
+            cur_w = ml_summary["current_weights"]
+            def_w = ml_summary["default_weights"]
+            ind_names = sorted(def_w.keys())
+
+            fig_w = go.Figure()
+            fig_w.add_trace(go.Bar(
+                name="Varsayılan",
+                x=ind_names,
+                y=[def_w[k] for k in ind_names],
+                marker_color="#6366f1",
+                opacity=0.5,
+            ))
+            fig_w.add_trace(go.Bar(
+                name="Öğrenilmiş",
+                x=ind_names,
+                y=[cur_w.get(k, 0) for k in ind_names],
+                marker_color="#10b981",
+            ))
+            fig_w.update_layout(
+                barmode="group",
+                height=350,
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=10, r=10, t=30, b=10),
+                legend=dict(orientation="h", y=1.12),
+            )
+            st.plotly_chart(fig_w, use_container_width=True)
+
+        with wc2:
+            st.markdown("#### Ağırlık Değişimleri")
+            changes = ml_summary["weight_changes"]
+            ch_names = sorted(changes.keys(), key=lambda k: abs(changes[k]), reverse=True)
+            ch_vals = [changes[k] for k in ch_names]
+            ch_colors = ["#10b981" if v >= 0 else "#ef4444" for v in ch_vals]
+
+            fig_ch = go.Figure(go.Bar(
+                x=ch_vals,
+                y=ch_names,
+                orientation="h",
+                marker_color=ch_colors,
+                text=[f"{v:+.4f}" for v in ch_vals],
+                textposition="auto",
+            ))
+            fig_ch.update_layout(
+                height=350,
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=10, r=10, t=30, b=10),
+                xaxis_title="Değişim",
+            )
+            st.plotly_chart(fig_ch, use_container_width=True)
+
+        # --- Sembol performansı ---
+        st.divider()
+        st.markdown("#### 📊 Sembol Performansı")
+        sym_perf = ml_summary["symbol_performance"]
+        if sym_perf:
+            sp_df = pd.DataFrame(sym_perf)
+            sp_df = sp_df[["symbol", "market", "total_trades", "wins", "losses", "total_pnl", "avg_pnl", "best_pnl", "worst_pnl"]]
+            sp_df.columns = ["Sembol", "Piyasa", "İşlem", "Kazanç", "Kayıp", "Toplam P&L", "Ort. P&L", "En İyi", "En Kötü"]
+            st.dataframe(
+                sp_df.style.format({
+                    "Toplam P&L": "₺{:+,.2f}",
+                    "Ort. P&L": "₺{:+,.2f}",
+                    "En İyi": "₺{:+,.2f}",
+                    "En Kötü": "₺{:+,.2f}",
+                }).applymap(
+                    lambda v: "color: #10b981" if isinstance(v, (int, float)) and v > 0 else ("color: #ef4444" if isinstance(v, (int, float)) and v < 0 else ""),
+                    subset=["Toplam P&L", "Ort. P&L"],
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("Henüz kapanmış işlem yok. Sistem öğrenmeye başlayınca burada sembol bazlı performans görünecek.")
+
+        # --- Öğrenme günlüğü ---
+        st.divider()
+        st.markdown("#### 📝 Son Öğrenme Kayıtları")
+        try:
+            with _db_conn() as _con:
+                _ml_rows = _con.execute(
+                    "SELECT symbol, direction, outcome, pnl, pnl_pct, composite_score, confidence, created_at "
+                    "FROM indicator_performance ORDER BY id DESC LIMIT 20"
+                ).fetchall()
+            if _ml_rows:
+                ml_df = pd.DataFrame([dict(r) for r in _ml_rows])
+                ml_df.columns = ["Sembol", "Yön", "Sonuç", "P&L (₺)", "P&L (%)", "Skor", "Güven", "Tarih"]
+                ml_df["Sonuç"] = ml_df["Sonuç"].map({"win": "✅ Kazanç", "loss": "❌ Kayıp"})
+                ml_df["Yön"] = ml_df["Yön"].str.upper()
+                st.dataframe(
+                    ml_df.style.format({
+                        "P&L (₺)": "₺{:+,.2f}",
+                        "P&L (%)": "%{:+.2f}",
+                        "Skor": "{:.1f}",
+                        "Güven": "{:.0f}%",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("Henüz öğrenme kaydı oluşmadı.")
+        except Exception:
+            st.info("Öğrenme veritabanı henüz hazır değil.")
+
+    except ImportError:
+        st.warning("ML modülü yüklenemedi. `scikit-learn` kurulumunu kontrol edin.")
+    except Exception as e:
+        st.error(f"ML sekme hatası: {e}")
 
 
 # ─── Footer ──────────────────────────────────────────────────────

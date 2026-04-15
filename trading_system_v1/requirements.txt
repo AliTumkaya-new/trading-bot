@@ -7,3 +7,4 @@ PyYAML>=6.0.2
 streamlit>=1.38.0
 plotly>=5.22.0
 streamlit-autorefresh>=1.0.1
+scikit-learn>=1.4.0
