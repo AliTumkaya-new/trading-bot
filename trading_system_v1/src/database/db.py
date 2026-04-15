@@ -106,6 +106,20 @@ def init_db() -> None:
             con.execute("ALTER TABLE positions ADD COLUMN leverage INTEGER NOT NULL DEFAULT 1")
         except Exception:
             pass  # column already exists
+        # Migration: trailing stop tracking
+        try:
+            con.execute("ALTER TABLE positions ADD COLUMN highest_price REAL")
+        except Exception:
+            pass
+        try:
+            con.execute("ALTER TABLE positions ADD COLUMN lowest_price REAL")
+        except Exception:
+            pass
+        # Migration: partial profit taken flag
+        try:
+            con.execute("ALTER TABLE positions ADD COLUMN partial_taken INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
 
 
 # ---------- Portfolio ----------
@@ -202,6 +216,9 @@ def upsert_position(
     realized_pnl: float = 0.0,
     direction: str = "long",
     leverage: int = 1,
+    highest_price: Optional[float] = None,
+    lowest_price: Optional[float] = None,
+    partial_taken: int = 0,
 ) -> None:
     now = _now_iso()
     with _conn() as con:
@@ -212,16 +229,20 @@ def upsert_position(
             else:
                 con.execute(
                     """UPDATE positions SET quantity=?, avg_price=?, stop_loss=?,
-                       take_profit=?, realized_pnl=realized_pnl+?, direction=?, leverage=?, updated_at=? WHERE symbol=?""",
-                    (quantity, avg_price, stop_loss, take_profit, realized_pnl, direction, leverage, now, symbol),
+                       take_profit=?, realized_pnl=realized_pnl+?, direction=?, leverage=?,
+                       highest_price=?, lowest_price=?, partial_taken=?, updated_at=? WHERE symbol=?""",
+                    (quantity, avg_price, stop_loss, take_profit, realized_pnl, direction, leverage,
+                     highest_price, lowest_price, partial_taken, now, symbol),
                 )
         else:
             if quantity > 0:
                 con.execute(
                     """INSERT INTO positions
-                       (symbol, market, quantity, avg_price, entry_time, stop_loss, take_profit, realized_pnl, direction, leverage, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (symbol, market, quantity, avg_price, now, stop_loss, take_profit, realized_pnl, direction, leverage, now),
+                       (symbol, market, quantity, avg_price, entry_time, stop_loss, take_profit,
+                        realized_pnl, direction, leverage, highest_price, lowest_price, partial_taken, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (symbol, market, quantity, avg_price, now, stop_loss, take_profit,
+                     realized_pnl, direction, leverage, highest_price, lowest_price, partial_taken, now),
                 )
 
 

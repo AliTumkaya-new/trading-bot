@@ -137,6 +137,40 @@ div[data-testid="stSidebar"] { background: var(--bg-dark); }
 
 init_db()
 
+# ─── Merkezi Veri Çekimi (Tüm tablar aynı veriyi kullanır) ──────
+@st.cache_data(ttl=10)
+def _load_all_data():
+    """Tüm dashboard verisini tek seferde çek, tutarlılık sağla."""
+    portfolio = get_portfolio()
+    positions = get_open_positions()
+    snapshots = get_daily_snapshots()
+    trades = get_all_trades()
+    signals = get_recent_signals(limit=50)
+    return portfolio, positions, snapshots, trades, signals
+
+_portfolio, _positions, _snapshots, _all_trades, _all_signals = _load_all_data()
+
+# Canlı fiyatları çek (açık pozisyon varsa)
+_pos_symbols = tuple(p["symbol"] for p in _positions)
+_live_prices = fetch_live_prices(_pos_symbols) if _pos_symbols else {}
+
+# Pozisyon detaylarını hesapla (merkezi)
+_pos_details: list = []
+_long_value: float = 0.0
+_short_unrealized: float = 0.0
+
+if _positions and _live_prices:
+    _pos_details, _long_value, _short_unrealized = _compute_position_details(
+        _positions, _live_prices
+    )
+
+# Canlı toplam varlık & P/L hesapla
+_initial_capital = _portfolio["initial_capital"] if _portfolio else 0.0
+_cash = _portfolio["cash"] if _portfolio else 0.0
+_live_total_equity = _cash + _long_value + _short_unrealized
+_live_total_pnl = _live_total_equity - _initial_capital if _initial_capital else 0.0
+_live_pnl_pct = (_live_total_pnl / _initial_capital * 100) if _initial_capital else 0.0
+
 
 # ─── TradingView Widget Helpers ──────────────────────────────────
 def _tv_symbol(symbol: str) -> str:
@@ -311,26 +345,15 @@ with st.sidebar:
     st.caption("Agresif Momentum · Paper Trading")
     st.divider()
 
-    portfolio = get_portfolio()
-    snapshots = get_daily_snapshots()
-    if portfolio:
-        initial = portfolio["initial_capital"]
-        if snapshots:
-            eq = snapshots[-1]["total_equity"]
-            pnl = snapshots[-1]["total_pnl"]
-        else:
-            eq = portfolio["cash"]
-            pnl = 0.0
-        pnl_pct = (pnl / initial * 100) if initial else 0
-
-        st.metric("Sermaye", f"₺{initial:,.2f}")
+    if _portfolio:
+        st.metric("Sermaye", f"₺{_initial_capital:,.2f}")
         st.metric(
             "Toplam Varlık",
-            f"₺{eq:,.2f}",
-            delta=f"{pnl:+,.2f} TL ({pnl_pct:+.1f}%)",
-            delta_color="normal" if pnl >= 0 else "inverse",
+            f"₺{_live_total_equity:,.2f}",
+            delta=f"{_live_total_pnl:+,.2f} TL ({_live_pnl_pct:+.1f}%)",
+            delta_color="normal" if _live_total_pnl >= 0 else "inverse",
         )
-        st.metric("Nakit", f"₺{portfolio['cash']:,.2f}")
+        st.metric("Nakit", f"₺{_cash:,.2f}")
     else:
         st.info("Veri yok — `python src/main.py` çalıştırın.")
 
@@ -352,27 +375,15 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 # TAB 1 — ANLIK DURUM
 # ══════════════════════════════════════════════════════════════════
 with tab1:
-    portfolio = get_portfolio()
-    positions = get_open_positions()
-    snapshots = get_daily_snapshots()
-
-    if not portfolio:
+    if not _portfolio:
         st.info("Henüz veri yok. Terminalde taramayı çalıştırın.")
     else:
-        initial = portfolio["initial_capital"]
-        cash = portfolio["cash"]
-
-        # Canlı fiyatları çek
-        pos_symbols = tuple(p["symbol"] for p in positions)
-        live_prices = fetch_live_prices(pos_symbols) if pos_symbols else {}
-
-        details, long_value, short_unrealized = _compute_position_details(
-            positions, live_prices
-        )
-
-        total_equity = cash + long_value + short_unrealized
-        total_pnl = total_equity - initial
-        total_pnl_pct = (total_pnl / initial * 100) if initial else 0
+        initial = _initial_capital
+        cash = _cash
+        details = _pos_details
+        total_equity = _live_total_equity
+        total_pnl = _live_total_pnl
+        total_pnl_pct = _live_pnl_pct
 
         # ─── Üst Kartlar ───
         c1, c2, c3, c4, c5 = st.columns(5)
@@ -414,8 +425,8 @@ with tab1:
                 unsafe_allow_html=True,
             )
         with c5:
-            tt = portfolio["total_trades"]
-            wt = portfolio["winning_trades"]
+            tt = _portfolio["total_trades"]
+            wt = _portfolio["winning_trades"]
             wr = (wt / tt * 100) if tt else 0
             st.markdown(
                 f"""<div class="top-card">
@@ -429,8 +440,8 @@ with tab1:
         st.markdown("")
 
         # ─── P&L Grafiği ───
-        if snapshots:
-            snap_df = pd.DataFrame(snapshots)
+        if _snapshots:
+            snap_df = pd.DataFrame(_snapshots)
             fig = go.Figure()
             fig.add_trace(
                 go.Scatter(
@@ -558,14 +569,12 @@ with tab1:
 # TAB 2 — CANLI GRAFİK (TradingView)
 # ══════════════════════════════════════════════════════════════════
 with tab2:
-    positions_tv = get_open_positions()
-
     st.markdown("### 📺 TradingView Canlı Grafikler")
 
-    if positions_tv:
+    if _positions:
         st.markdown("**Açık pozisyonlarınızın canlı grafikleri:**")
 
-        for p in positions_tv:
+        for p in _positions:
             sym = p["symbol"]
             direction = p.get("direction", "long")
             badge = "🟢 LONG" if direction == "long" else "🔴 SHORT"
@@ -602,21 +611,17 @@ with tab2:
 # TAB 3 — POZİSYONLAR (Detaylı Tablo + Grafikler)
 # ══════════════════════════════════════════════════════════════════
 with tab3:
-    positions = get_open_positions()
-    if not positions:
+    if not _positions:
         st.info("Açık pozisyon yok.")
     else:
-        pos_symbols = tuple(p["symbol"] for p in positions)
-        live_prices = fetch_live_prices(pos_symbols)
-
         rows = []
-        for p in positions:
+        for p in _positions:
             sym = p["symbol"]
             entry = p["avg_price"]
             qty = p["quantity"]
             direction = p.get("direction", "long")
             lev = p.get("leverage") or 1
-            current = live_prices.get(sym, entry)
+            current = _live_prices.get(sym, entry)
             notional = qty * entry
             margin = notional / lev if lev > 1 else notional
 
@@ -732,26 +737,45 @@ with tab3:
 # TAB 4 — İŞLEM GEÇMİŞİ
 # ══════════════════════════════════════════════════════════════════
 with tab4:
-    trades = get_all_trades()
-    if not trades:
+    if not _all_trades:
         st.info("Henüz işlem yok.")
     else:
         st.markdown("### 📜 İşlem Geçmişi")
 
-        trades_df = pd.DataFrame(trades)
+        trades_df = pd.DataFrame(_all_trades)
 
         for _, t in trades_df.iterrows():
             side = t["side"]
             if side == "buy":
                 icon, color, label = "🟢", "g", "ALIŞ (LONG)"
             elif side == "short":
-                icon, color, label = "🔴", "r", "SATIŞ (SHORT)"
+                icon, color, label = "🔴", "r", "AÇIĞA SATIŞ (SHORT)"
             elif "cover" in str(side):
-                icon, color, label = "🟡", "y", "KAPANIŞ"
+                icon, color, label = "🟡", "y", "SHORT KAPANIŞ"
+            elif side == "sell":
+                # Sell reason: metadata'dan kontrol et
+                meta_str = t.get("metadata") or ""
+                if "stop_loss" in meta_str:
+                    icon, color, label = "🛑", "r", "STOP-LOSS SATIŞ"
+                elif "take_profit" in meta_str:
+                    icon, color, label = "🎯", "g", "KÂR AL SATIŞ"
+                else:
+                    icon, color, label = "🔻", "r", "SATIŞ"
             else:
-                icon, color, label = "🔻", "r", "SATIŞ"
+                icon, color, label = "⚪", "d", side.upper()
 
             time_str = (t["created_at"] or "")[:19].replace("T", " ")
+
+            # SL/TP yüzdeleri
+            sl_pct = t.get("stop_loss_pct") or 0
+            tp_pct = t.get("take_profit_pct") or 0
+            sl_tp_html = ""
+            if sl_pct or tp_pct:
+                sl_tp_html = f"""
+                <div style="text-align:center;">
+                    <span class="d">SL:</span> <span class="r"><b>%{sl_pct*100:.1f}</b></span>
+                    <span class="d" style="margin-left:8px;">TP:</span> <span class="g"><b>%{tp_pct*100:.1f}</b></span>
+                </div>"""
 
             st.markdown(
                 f"""
@@ -777,6 +801,7 @@ with tab4:
                     <span class="d" style="margin-left:12px;">Komisyon:</span>
                     <span class="r">{t['fee']:.4f}</span>
                 </div>
+                {sl_tp_html}
                 <div style="text-align:right; min-width:120px;">
                     <span class="d" style="font-size:0.78rem;">{time_str}</span>
                 </div>
@@ -785,7 +810,7 @@ with tab4:
             )
 
         st.markdown("")
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
             total_buy = trades_df[trades_df["side"] == "buy"]["notional"].sum()
             st.metric("Toplam Alış Tutarı", f"₺{total_buy:,.2f}")
@@ -795,22 +820,49 @@ with tab4:
         with c3:
             total_fee = trades_df["fee"].sum()
             st.metric("Toplam Komisyon", f"₺{total_fee:,.4f}")
+        with c4:
+            # Gerçekleşmiş P/L (portfolio'dan)
+            realized = _portfolio["total_pnl"] if _portfolio else 0.0
+            st.metric(
+                "Gerçekleşmiş P&L",
+                f"₺{realized:+,.2f}",
+                delta_color="normal" if realized >= 0 else "inverse",
+            )
 
 
 # ══════════════════════════════════════════════════════════════════
 # TAB 5 — PERFORMANS
 # ══════════════════════════════════════════════════════════════════
 with tab5:
-    snapshots = get_daily_snapshots()
-    portfolio = get_portfolio()
-
-    if not snapshots or not portfolio:
+    if not _snapshots or not _portfolio:
         st.info("Performans verisi yok.")
     else:
-        snap_df = pd.DataFrame(snapshots)
-        initial = portfolio["initial_capital"]
+        snap_df = pd.DataFrame(_snapshots)
+        initial = _initial_capital
 
         st.markdown("### 📈 Performans Analizi")
+
+        # Canlı özet kartları (tüm tablarla tutarlı)
+        pc1, pc2, pc3, pc4, pc5 = st.columns(5)
+        with pc1:
+            st.metric("Sermaye", f"₺{initial:,.2f}")
+        with pc2:
+            st.metric(
+                "Toplam Varlık (Canlı)",
+                f"₺{_live_total_equity:,.2f}",
+                delta=f"{_live_total_pnl:+,.2f} TL",
+                delta_color="normal" if _live_total_pnl >= 0 else "inverse",
+            )
+        with pc3:
+            realized = _portfolio["total_pnl"]
+            unrealized = _live_total_pnl - realized
+            st.metric("Gerçekleşmiş P&L", f"₺{realized:+,.2f}")
+        with pc4:
+            st.metric("Gerçekleşmemiş P&L", f"₺{unrealized:+,.2f}")
+        with pc5:
+            st.metric("Nakit", f"₺{_cash:,.2f}")
+
+        st.markdown("")
 
         c1, c2 = st.columns(2)
         with c1:
@@ -873,9 +925,9 @@ with tab5:
             st.plotly_chart(fig, use_container_width=True)
 
         # İstatistikler
-        tt = portfolio["total_trades"]
-        wt = portfolio["winning_trades"]
-        lt = portfolio["losing_trades"]
+        tt = _portfolio["total_trades"]
+        wt = _portfolio["winning_trades"]
+        lt = _portfolio["losing_trades"]
         wr = (wt / tt * 100) if tt else 0
         c1, c2, c3, c4 = st.columns(4)
         with c1:
@@ -885,11 +937,12 @@ with tab5:
         with c3:
             st.metric("Kaybeden", str(lt))
         with c4:
-            net_pnl = snapshots[-1]["total_pnl"] if snapshots else 0
+            # Canlı P&L kullan (snapshot yerine)
             st.metric(
                 "Net P&L",
-                f"₺{net_pnl:+,.2f}",
-                delta_color="normal" if net_pnl >= 0 else "inverse",
+                f"₺{_live_total_pnl:+,.2f}",
+                delta=f"%{_live_pnl_pct:+.1f}",
+                delta_color="normal" if _live_total_pnl >= 0 else "inverse",
             )
 
 # ══════════════════════════════════════════════════════════════════
@@ -1043,7 +1096,7 @@ with tab6:
 with st.sidebar:
     st.divider()
     st.markdown("### 🔔 Son İşlemler")
-    recent_trades = get_all_trades()[:5]
+    recent_trades = _all_trades[:5]
     if recent_trades:
         for t in recent_trades:
             side = t["side"]
@@ -1059,7 +1112,7 @@ with st.sidebar:
         st.caption("Henüz işlem yok")
 
     st.markdown("### 📡 Son Sinyaller")
-    recent_sigs = get_recent_signals(limit=5)
+    recent_sigs = _all_signals[:5]
     if recent_sigs:
         for s in recent_sigs:
             sig_type = s.get("signal_type", "flat")
