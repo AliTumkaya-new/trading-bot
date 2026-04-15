@@ -264,6 +264,22 @@ def run_cycle() -> None:
         is_short = signal.signal == SignalType.SHORT
         side = Side.SELL if is_short else Side.BUY
 
+        # Kripto kaldıraç
+        leverage = config.risk.crypto_leverage if signal.market == MarketType.CRYPTO else 1
+
+        # Mevcut nakite göre pozisyon boyutunu ayarla
+        notional = quantity * last_close
+        margin = notional / leverage
+        fee_est = notional * broker.fee_rate
+        if (margin + fee_est) > broker.cash:
+            # Nakitin yettiği kadar pozisyon aç: margin + fee = notional*(1/lev + fee_rate) <= cash
+            max_notional = broker.cash * 0.995 / (1.0 / leverage + broker.fee_rate)
+            quantity = max_notional / last_close
+            if quantity <= 0:
+                logger.info("❌ YETERSIZ BAKİYE: %s — nakit yetersiz", signal.symbol)
+                continue
+            logger.info("⚠️ POZİSYON KÜÇÜLTÜLDÜ: %s — mevcut nakite göre ayarlandı (₺%.2f)", signal.symbol, max_notional)
+
         order = OrderRequest(
             symbol=signal.symbol,
             market=signal.market,
@@ -279,7 +295,7 @@ def run_cycle() -> None:
         )
 
         try:
-            fill = broker.submit_market_order(order=order, mark_price=last_close)
+            fill = broker.submit_market_order(order=order, mark_price=last_close, leverage=leverage)
         except ValueError as e:
             logger.info("❌ YETERSIZ BAKİYE: %s — %s", signal.symbol, e)
             continue

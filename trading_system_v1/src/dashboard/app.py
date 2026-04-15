@@ -16,12 +16,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 
-# Auto-refresh: 60 saniyede bir sayfa otomatik yenilenir
+# Auto-refresh: 10 saniyede bir sayfa otomatik yenilenir
 try:
     from streamlit_autorefresh import st_autorefresh
-    st_autorefresh(interval=60_000, limit=None, key="live_refresh")
+    st_autorefresh(interval=10_000, limit=None, key="live_refresh")
 except ImportError:
     pass  # fallback: manuel yenile butonu
 
@@ -136,6 +137,80 @@ div[data-testid="stSidebar"] { background: var(--bg-dark); }
 
 init_db()
 
+
+# ─── TradingView Widget Helpers ──────────────────────────────────
+def _tv_symbol(symbol: str) -> str:
+    """Dashboard sembolünü TradingView formatına çevir."""
+    if symbol.endswith(".IS"):
+        return f"BIST:{symbol.replace('.IS', '')}"
+    return f"BINANCE:{symbol}"
+
+
+def _tradingview_chart(symbol: str, height: int = 400) -> str:
+    """TradingView Advanced Chart widget HTML'i üret."""
+    tv_sym = _tv_symbol(symbol)
+    return f"""
+    <div class="tradingview-widget-container" style="height:{height}px;">
+      <div id="tv_{symbol.replace('.','_')}" style="height:100%;"></div>
+      <script type="text/javascript"
+        src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+        new TradingView.widget({{
+          "container_id": "tv_{symbol.replace('.','_')}",
+          "autosize": true,
+          "symbol": "{tv_sym}",
+          "interval": "240",
+          "timezone": "Europe/Istanbul",
+          "theme": "dark",
+          "style": "1",
+          "locale": "tr",
+          "toolbar_bg": "#0a0e1a",
+          "enable_publishing": false,
+          "hide_top_toolbar": false,
+          "hide_legend": false,
+          "save_image": false,
+          "studies": ["RSI@tv-basicstudies","MACD@tv-basicstudies","BB@tv-basicstudies"],
+          "show_popup_button": true,
+          "popup_width": "1000",
+          "popup_height": "650"
+        }});
+      </script>
+    </div>"""
+
+
+def _tradingview_ticker_tape() -> str:
+    """TradingView haber bandı (ticker tape) widget HTML'i üret."""
+    return """
+    <div class="tradingview-widget-container">
+      <div class="tradingview-widget-container__widget"></div>
+      <script type="text/javascript"
+        src="https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js" async>
+        {
+          "symbols": [
+            {"proName": "BINANCE:BTCUSDT", "title": "BTC/USDT"},
+            {"proName": "BINANCE:ETHUSDT", "title": "ETH/USDT"},
+            {"proName": "BINANCE:SOLUSDT", "title": "SOL/USDT"},
+            {"proName": "BINANCE:AVAXUSDT", "title": "AVAX/USDT"},
+            {"proName": "BINANCE:FETUSDT", "title": "FET/USDT"},
+            {"proName": "BINANCE:INJUSDT", "title": "INJ/USDT"},
+            {"proName": "BINANCE:TIAUSDT", "title": "TIA/USDT"},
+            {"proName": "BINANCE:APTUSDT", "title": "APT/USDT"},
+            {"proName": "BINANCE:NEARUSDT", "title": "NEAR/USDT"},
+            {"proName": "BINANCE:ARBUSDT", "title": "ARB/USDT"},
+            {"proName": "BIST:ASELS", "title": "ASELS"},
+            {"proName": "BIST:THYAO", "title": "THYAO"},
+            {"proName": "BIST:TUPRS", "title": "TUPRS"},
+            {"proName": "BIST:SISE", "title": "ŞİŞE"},
+            {"proName": "BIST:KCHOL", "title": "KCHOL"}
+          ],
+          "showSymbolLogo": true,
+          "colorTheme": "dark",
+          "isTransparent": true,
+          "displayMode": "adaptive",
+          "locale": "tr"
+        }
+      </script>
+    </div>"""
 # ─── Anlık Fiyat Çekme ──────────────────────────────────────────
 BINANCE_PRICE_URLS = [
     "https://api.binance.com/api/v3/ticker/price",
@@ -260,9 +335,12 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
+# ─── TradingView Ticker Tape (üst bant) ─────────────────────────
+components.html(_tradingview_ticker_tape(), height=78, scrolling=False)
+
 # ─── Tabs ────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["📊 Anlık Durum", "💼 Pozisyonlar", "📜 İşlem Geçmişi", "📈 Performans"]
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["📊 Anlık Durum", "📺 Canlı Grafik", "💼 Pozisyonlar", "📜 İşlem Geçmişi", "📈 Performans"]
 )
 
 # ══════════════════════════════════════════════════════════════════
@@ -470,9 +548,53 @@ with tab1:
 
 
 # ══════════════════════════════════════════════════════════════════
-# TAB 2 — POZİSYONLAR (Detaylı Tablo + Grafikler)
+# TAB 2 — CANLI GRAFİK (TradingView)
 # ══════════════════════════════════════════════════════════════════
 with tab2:
+    positions_tv = get_open_positions()
+
+    st.markdown("### 📺 TradingView Canlı Grafikler")
+
+    if positions_tv:
+        st.markdown("**Açık pozisyonlarınızın canlı grafikleri:**")
+
+        for p in positions_tv:
+            sym = p["symbol"]
+            direction = p.get("direction", "long")
+            badge = "🟢 LONG" if direction == "long" else "🔴 SHORT"
+            entry = p["avg_price"]
+            sl = p.get("stop_loss") or 0
+            tp = p.get("take_profit") or 0
+
+            st.markdown(f"#### {badge} — {sym}")
+            col_info1, col_info2, col_info3 = st.columns(3)
+            with col_info1:
+                st.caption(f"Giriş: **{entry:.4f}**")
+            with col_info2:
+                st.caption(f"SL: **{sl:.4f}**" if sl else "SL: —")
+            with col_info3:
+                st.caption(f"TP: **{tp:.4f}**" if tp else "TP: —")
+
+            components.html(_tradingview_chart(sym, height=450), height=470)
+            st.divider()
+    else:
+        st.info("Açık pozisyon yok. Pozisyon açıldığında canlı grafikleri burada görebilirsiniz.")
+
+    # Ek olarak popüler kripto/borsa grafiklerini göster
+    st.markdown("### 🌐 Popüler Piyasalar")
+    pop_col1, pop_col2 = st.columns(2)
+    with pop_col1:
+        st.markdown("**BTC/USDT**")
+        components.html(_tradingview_chart("BTCUSDT", height=350), height=370)
+    with pop_col2:
+        st.markdown("**ETH/USDT**")
+        components.html(_tradingview_chart("ETHUSDT", height=350), height=370)
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 3 — POZİSYONLAR (Detaylı Tablo + Grafikler)
+# ══════════════════════════════════════════════════════════════════
+with tab3:
     positions = get_open_positions()
     if not positions:
         st.info("Açık pozisyon yok.")
@@ -597,9 +719,9 @@ with tab2:
 
 
 # ══════════════════════════════════════════════════════════════════
-# TAB 3 — İŞLEM GEÇMİŞİ
+# TAB 4 — İŞLEM GEÇMİŞİ
 # ══════════════════════════════════════════════════════════════════
-with tab3:
+with tab4:
     trades = get_all_trades()
     if not trades:
         st.info("Henüz işlem yok.")
@@ -666,9 +788,9 @@ with tab3:
 
 
 # ══════════════════════════════════════════════════════════════════
-# TAB 4 — PERFORMANS
+# TAB 5 — PERFORMANS
 # ══════════════════════════════════════════════════════════════════
-with tab4:
+with tab5:
     snapshots = get_daily_snapshots()
     portfolio = get_portfolio()
 
