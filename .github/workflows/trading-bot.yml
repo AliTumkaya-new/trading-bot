@@ -28,14 +28,26 @@ jobs:
           cache-dependency-path: trading_system_v1/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r trading_system_v1/requirements.txt
+        run: |
+          pip install -r trading_system_v1/requirements.txt
+          python -c "import pandas; import yfinance; import requests; print('All packages OK')"
 
       - name: Run trading cycle
         working-directory: trading_system_v1/src
         env:
           PYTHONUNBUFFERED: '1'
           TZ: Europe/Istanbul
-        run: python main.py --once
+        run: |
+          python -c "
+          import sys, traceback
+          sys.path.insert(0, '.')
+          try:
+              from main import run_cycle
+              run_cycle()
+          except Exception as e:
+              traceback.print_exc()
+              sys.exit(1)
+          "
 
       - name: Save DB to repo
         run: |
