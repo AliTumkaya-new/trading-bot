@@ -429,11 +429,12 @@ with tab1:
             tt = _portfolio["total_trades"]
             wt = _portfolio["winning_trades"]
             wr = (wt / tt * 100) if tt else 0
+            wr_cls = "g" if wr >= 50 else "r"
             st.markdown(
                 f"""<div class="top-card">
                 <p class="label">İşlem / Win Rate</p>
                 <p class="value y">{tt} işlem</p>
-                <p class="sub {"g" if wr >= 50 else "r"}">%{wr:.0f} başarı</p>
+                <p class="sub {wr_cls}">%{wr:.0f} başarı</p>
             </div>""",
                 unsafe_allow_html=True,
             )
@@ -1046,7 +1047,7 @@ with tab6:
                     "Ort. P&L": "₺{:+,.2f}",
                     "En İyi": "₺{:+,.2f}",
                     "En Kötü": "₺{:+,.2f}",
-                }).applymap(
+                }).map(
                     lambda v: "color: #10b981" if isinstance(v, (int, float)) and v > 0 else ("color: #ef4444" if isinstance(v, (int, float)) and v < 0 else ""),
                     subset=["Toplam P&L", "Ort. P&L"],
                 ),
